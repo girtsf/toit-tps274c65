@@ -1,0 +1,191 @@
+import expect show *
+import tps274c65 show *
+
+import .fake-device
+
+main:
+  test-read-is-pipelined
+  test-read-touches-the-register-once
+  test-read-does-not-disturb-outputs
+  test-read-picks-up-faults
+  test-write
+  test-set-channel
+  test-set-leds
+  test-write-switch-state-directly
+
+/**
+A read has to spend two frames, because the device answers one frame late.
+
+A single frame would return whatever the previous frame asked for, which for
+  the first read of all is nothing.
+*/
+test-read-is-pipelined:
+  device := FakeDevice
+  device.contents[REG-DEV-CONFIG1] = 0x0a
+  device.contents[REG-DEV-CONFIG4] = 0x02
+  driver := Driver device
+
+  expect-equals 0x0a (driver.read-register REG-DEV-CONFIG1)
+  expect-equals 2 device.frames.size
+  // The first frame delivers the address, the second collects the answer.
+  // See $test-read-touches-the-register-once for why the second one asks
+  // for FAULT_TYPE_STAT rather than repeating the address.
+  expect-equals #[REG-DEV-CONFIG1, 0x00] device.frames[0]
+  expect-equals #[REG-FAULT-TYPE-STAT, 0x00] device.frames[1]
+
+  // A second read of a different register must not pick up the first one.
+  expect-equals 0x02 (driver.read-register REG-DEV-CONFIG4)
+  expect-equals 4 device.frames.size
+
+  // Reading the same register twice in a row gives the same answer.
+  expect-equals 0x02 (driver.read-register REG-DEV-CONFIG4)
+
+/**
+The register asked for is addressed exactly once, however many frames it takes.
+
+The collecting frame's address does not affect the value collected, so it must
+  not be the register under read: pointing it there a second time would clear
+  a read-to-clear register twice, throwing away anything that latched between
+  the two frames. It addresses FAULT_TYPE_STAT instead, which is plain `R`.
+*/
+test-read-touches-the-register-once:
+  device := FakeDevice
+  device.read-to-clear.add REG-FAULT-GLOBAL-TYPE
+  device.contents[REG-FAULT-GLOBAL-TYPE] = GLOBAL-POR | GLOBAL-VS-UV
+
+  driver := Driver device
+  expect-equals (GLOBAL-POR | GLOBAL-VS-UV) driver.read-global-faults
+
+  // Once, not twice: a second access would clear a freshly latched fault.
+  expect-equals 1 device.accesses[REG-FAULT-GLOBAL-TYPE]
+  expect-equals REG-FAULT-GLOBAL-TYPE device.frames[0][0]
+  expect-equals REG-FAULT-TYPE-STAT device.frames[1][0]
+
+  // The latch really did clear, so a second read comes back empty.
+  expect-equals 0 driver.read-global-faults
+
+  // A fault that latches after the first read is still reported.
+  device.contents[REG-FAULT-GLOBAL-TYPE] = GLOBAL-WD-ERR
+  expect-equals GLOBAL-WD-ERR driver.read-global-faults
+
+/** Reading resends the switch state, so the outputs keep their state. */
+test-read-does-not-disturb-outputs:
+  device := FakeDevice
+  driver := Driver device
+  driver.set-channel 2 --on
+  driver.set-channel 4 --on
+  expected := (channel-mask 2) | (channel-mask 4)
+
+  device.frames.clear
+  driver.read-register REG-DEV-CONFIG1
+  device.frames.do: | frame/ByteArray |
+    expect-equals expected frame[1] & 0x0f
+  expect-equals expected device.contents[REG-SW-STATE]
+  expect-equals expected driver.switch-state
+
+/** The fault byte is not pipelined, so it is current after any frame. */
+test-read-picks-up-faults:
+  device := FakeDevice
+  driver := Driver device
+  expect-equals 0 driver.faults
+
+  device.faults = FAULT-SUPPLY | FAULT-GLOBAL
+  driver.read-register REG-DEV-CONFIG1
+  expect-equals (FAULT-SUPPLY | FAULT-GLOBAL) driver.faults
+
+/** A write takes one frame, and reads back as written. */
+test-write:
+  device := FakeDevice
+  driver := Driver device
+
+  driver.write-register REG-DEV-CONFIG3 0x80
+  expect-equals 1 device.frames.size
+  expect-equals #[0x80 | REG-DEV-CONFIG3, 0x80] device.frames[0]
+  expect-equals 0x80 (driver.read-register REG-DEV-CONFIG3)
+
+/** Setting one channel leaves the others alone, and always writes. */
+test-set-channel:
+  device := FakeDevice
+  driver := Driver device
+
+  driver.set-channel 1 --on
+  expect-equals 0b0001 driver.switch-state
+  driver.set-channel 3 --on
+  expect-equals 0b0101 driver.switch-state
+  expect (driver.channel-on 1)
+  expect (driver.channel-on 3)
+  expect-not (driver.channel-on 2)
+
+  frames := device.frames.size
+  // Turning on a channel that is already on still writes SW_STATE. The write
+  // is idempotent, and it is what feeds the watchdog, so a run of no-op calls
+  // must not go silent on the bus.
+  driver.set-channel 3 --on
+  expect-equals frames + 1 device.frames.size
+  expect-equals 0b0101 driver.switch-state
+  expect-equals 0b0101 device.contents[REG-SW-STATE]
+
+  driver.set-channel 1 --no-on
+  expect-equals 0b0100 driver.switch-state
+  expect-equals 0b0100 device.contents[REG-SW-STATE]
+
+  driver.close
+  expect-equals 0 driver.switch-state
+  expect-equals 0 device.contents[REG-SW-STATE]
+
+/** Setting one LED leaves the others alone, and writes only its register. */
+test-set-leds:
+  device := FakeDevice
+  driver := Driver device
+
+  driver.set-leds 1 --on
+  expect-equals 0b0000_0001 driver.leds
+  expect-equals 1 device.frames.size
+  expect-equals #[0x80 | REG-LED1-4-CTL, 0b0001] device.frames[0]
+
+  // LED5 to LED8 live in the other register, and it takes the high nibble
+  // of $Driver.leds shifted down to its own bits [3:0].
+  driver.set-leds 6 --on
+  expect-equals 0b0010_0001 driver.leds
+  expect-equals #[0x80 | REG-LED5-8-CTL, 0b0010] device.frames[1]
+  expect-equals 0b0001 device.contents[REG-LED1-4-CTL]
+  expect-equals 0b0010 device.contents[REG-LED5-8-CTL]
+
+  // Turning one off leaves the other register untouched, on the bus as well.
+  driver.set-leds 1 --no-on
+  expect-equals 0b0010_0000 driver.leds
+  expect-equals #[0x80 | REG-LED1-4-CTL, 0b0000] device.frames[2]
+  expect-equals 0b0010 device.contents[REG-LED5-8-CTL]
+
+  // Writing a control register directly keeps the shadow in step.
+  driver.write-register REG-LED1-4-CTL 0b1010
+  expect-equals 0b0010_1010 driver.leds
+
+  expect-throw "INVALID_ARGUMENT": driver.set-leds 0 --on
+  expect-throw "INVALID_ARGUMENT": driver.set-leds LED-COUNT + 1 --on
+
+/**
+Writing SW_STATE by hand keeps the shadow inside the four channels.
+
+The shadow goes back out in the data byte of every read frame, so keeping a
+  value with reserved bits set would make the next read throw instead of
+  reaching the bus.
+*/
+test-write-switch-state-directly:
+  device := FakeDevice
+  driver := Driver device
+
+  driver.write-register REG-SW-STATE 0b0101
+  expect-equals 0b0101 driver.switch-state
+
+  // Bits [7:4] of SW_STATE are reserved. The device gets what was asked for,
+  // but only the four channel bits are carried in the read frames.
+  driver.write-register REG-SW-STATE 0b0011_0010
+  expect-equals 0b0010 driver.switch-state
+  expect-equals #[0x80 | REG-SW-STATE, 0b0011_0010] device.frames[1]
+  driver.read-register REG-DEV-CONFIG1
+  expect-equals #[REG-DEV-CONFIG1, 0b0010] device.frames[2]
+
+  // Reading it back gets those reserved bits as ones, so what comes over the
+  // wire is 0xf2 and not 0x02. Confirmed on a real device.
+  expect-equals 0xf2 (driver.read-register REG-SW-STATE)
