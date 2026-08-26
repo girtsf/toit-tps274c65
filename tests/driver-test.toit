@@ -15,6 +15,11 @@ main:
   test-set-current-limit
   test-set-current-limit-split
   test-set-inrush-mode
+  test-read-current-raw
+  test-read-8-bit-results
+  test-read-supply-voltage-raw
+  test-set-adc
+  test-adc-conversions
 
 /**
 A read has to spend two frames, because the device answers one frame late.
@@ -273,3 +278,121 @@ test-set-inrush-mode:
       device.frames[9]
 
   expect-throw "INVALID_ARGUMENT": driver.set-inrush-mode --limit=4
+
+/**
+A current conversion is assembled from two registers, the LSBs masked down.
+
+ADC_RESULT_CHx_I_LSB has six reserved bits above the two that matter, and
+  reserved bits read back as ones.
+*/
+test-read-current-raw:
+  device := FakeDevice
+  device.reserved-ones[REG-ADC-RESULT-CH2-I-LSB] = 0xfc
+  device.contents[REG-ADC-RESULT-CH2-I] = 0xc1
+  device.contents[REG-ADC-RESULT-CH2-I-LSB] = 0x02
+
+  driver := Driver device
+  expect-equals 0x306 (driver.read-current-raw 2)
+  // Two registers, two frames each.
+  expect-equals 4 device.frames.size
+  expect-equals #[REG-ADC-RESULT-CH2-I, 0x00] device.frames[0]
+  expect-equals #[REG-ADC-RESULT-CH2-I-LSB, 0x00] device.frames[2]
+
+  // Full scale is 3.25 A with the recommended 1 kOhm sense resistor.
+  device.contents[REG-ADC-RESULT-CH1-I] = 0xff
+  device.contents[REG-ADC-RESULT-CH1-I-LSB] = 0x03
+  expect-equals 1023 (driver.read-current-raw 1)
+  expect-near_ 3248.0 (driver.read-current 1)
+  // Halving the sense resistor doubles the current a conversion stands for.
+  expect-near_ 6496.0 (driver.read-current 1 --sense-resistor=500.0)
+
+  expect-throw "INVALID_ARGUMENT": driver.read-current-raw 0
+  expect-throw "INVALID_ARGUMENT": driver.read-current-raw 5
+
+/** The temperature and output voltage results are one register each. */
+test-read-8-bit-results:
+  device := FakeDevice
+  driver := Driver device
+
+  // 198 is where 25 degrees lands: the scale is coarse enough that a count
+  // is nearly two degrees.
+  device.contents[REG-ADC-RESULT-CH3-T] = 198
+  expect-equals 198 (driver.read-temperature-raw 3)
+  expect-equals 2 device.frames.size
+  expect-near_ 24.1 (driver.read-temperature 3)
+
+  // 20 V of a 30 V scale.
+  device.contents[REG-ADC-RESULT-CH4-V] = 170
+  expect-equals 170 (driver.read-output-voltage-raw 4)
+  expect-near_ 20.0 (driver.read-output-voltage 4)
+
+  expect-throw "INVALID_ARGUMENT": driver.read-temperature-raw 5
+  expect-throw "INVALID_ARGUMENT": driver.read-output-voltage-raw 0
+
+/** The supply voltage is 10 bits, like the current, and runs to 30 V. */
+test-read-supply-voltage-raw:
+  device := FakeDevice
+  device.reserved-ones[REG-ADC-RESULT-VS-LSB] = 0xfc
+  device.contents[REG-ADC-RESULT-VS] = 0x99
+  device.contents[REG-ADC-RESULT-VS-LSB] = 0x01
+
+  driver := Driver device
+  expect-equals 0x265 (driver.read-supply-voltage-raw)
+  expect-equals 4 device.frames.size
+  expect-near_ 17.98 (driver.read-supply-voltage)
+
+/**
+Switching the ADC on keeps the rest of DEV_CONFIG5, reserved bits aside.
+
+The register also holds the fault latching and auto retry settings, and its
+  top two bits are reserved and read back as ones -- which must not be
+  written back out.
+*/
+test-set-adc:
+  device := FakeDevice
+  device.reserved-ones[REG-DEV-CONFIG5] = 0xc0
+  driver := Driver device
+
+  // Something in the register that has nothing to do with the ADC.
+  driver.write-register REG-DEV-CONFIG5 0x10  // AUTO_RETRY_DIS.
+
+  expect-not driver.adc-enabled
+  driver.set-adc --enabled
+  expect-equals 0x10 | CONFIG5-ADC-EN device.contents[REG-DEV-CONFIG5]
+  expect driver.adc-enabled
+
+  driver.set-adc --no-enabled
+  expect-equals 0x10 device.contents[REG-DEV-CONFIG5]
+  expect-not driver.adc-enabled
+
+/** The conversions the datasheet's own numbers pin down. */
+test-adc-conversions:
+  // TSNS is 2.57 V at -40 degrees, 2.17 V at 25 and 1.55 V at 125, against a
+  // 2.8 V reference.
+  // The datasheet gives those to three digits, which is worth about a degree
+  // once it is turned back into a conversion.
+  expect-near_ -40.0 (adc-celsius (adc-full-scale-fraction_ 2.57 255)) --epsilon=1.0
+  expect-near_ 25.0 (adc-celsius (adc-full-scale-fraction_ 2.17 255)) --epsilon=1.0
+  expect-near_ 125.0 (adc-celsius (adc-full-scale-fraction_ 1.55 255)) --epsilon=1.0
+
+  // VOUTSNS is 1.87 V with 20 V on the output.
+  expect-near_ 20.0 (adc-volts (adc-full-scale-fraction_ 1.87 255)
+      --full-scale=ADC-FULL-SCALE-8-BIT)
+
+  // Zero converts to zero everywhere but the temperature, whose scale is
+  // upside down and offset.
+  expect-near_ 0.0 (adc-milli-amps 0)
+  expect-near_ 0.0 (adc-volts 0 --full-scale=ADC-FULL-SCALE-10-BIT)
+  expect-near_ 373.5 (adc-celsius 0)
+
+  // A count is 3.17 mA of current and 29 mV of supply voltage.
+  expect-near_ 3.17 (adc-milli-amps 1)
+  expect-near_ 0.0293 (adc-volts 1 --full-scale=ADC-FULL-SCALE-10-BIT) --epsilon=0.0001
+
+/** Returns the conversion that a reading of $volts against the reference is. */
+adc-full-scale-fraction_ volts/float full-scale/int -> int:
+  return (volts * 1000 * full-scale / ADC-REFERENCE-MV).round
+
+expect-near_ expected/float actual/float --epsilon/float=0.05 -> none:
+  expect (expected - actual).abs <= epsilon
+      --message="expected $expected, got $actual"

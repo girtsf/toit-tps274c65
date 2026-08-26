@@ -13,8 +13,11 @@ LED-COUNT ::= 8
 
 /** Returns the bit mask for $channel. */
 channel-mask channel/int -> int:
-  if not 1 <= channel <= CHANNEL-COUNT: throw "INVALID_ARGUMENT"
+  check-channel_ channel
   return 1 << (channel - 1)
+
+check-channel_ channel/int -> none:
+  if not 1 <= channel <= CHANNEL-COUNT: throw "INVALID_ARGUMENT"
 
 /** Returns the bit mask for $led. See $Driver.leds. */
 led-mask led/int -> int:
@@ -226,7 +229,7 @@ class Driver:
   */
   set-current-limit code/IlimCode --inrush/InrushWindow=InrushWindow.MS-0 -> none:
     write-register REG-DEV-CONFIG1 (build-ilim-config code --inrush=inrush)
-    update-config3_ --clear=CONFIG3-ILIM-SET
+    update-register_ REG-DEV-CONFIG3 --clear=CONFIG3-ILIM-SET
 
   /**
   Sets the overcurrent limit of channels 1 and 2 apart from channels 3 and 4.
@@ -247,7 +250,7 @@ class Driver:
       --inrush-3-4/InrushWindow=InrushWindow.MS-0:
     write-register REG-DEV-CONFIG1 (build-ilim-config channels-1-2 --inrush=inrush-1-2)
     write-register REG-DEV-CONFIG2 (build-ilim-config channels-3-4 --inrush=inrush-3-4)
-    update-config3_ --set=CONFIG3-ILIM-SET
+    update-register_ REG-DEV-CONFIG3 --set=CONFIG3-ILIM-SET
 
   /**
   Sets what the inrush window of $set-current-limit does.
@@ -270,22 +273,140 @@ class Driver:
   */
   set-inrush-mode --limit/int=INRUSH-LIMIT-1X --timeout/bool=false -> none:
     if not 0 <= limit <= CONFIG3-INRUSH-LIMIT-MASK: throw "INVALID_ARGUMENT"
-    update-config3_
+    update-register_ REG-DEV-CONFIG3
         --set=(limit | (timeout ? CONFIG3-ILIM-CONFIG : 0))
         --clear=(CONFIG3-INRUSH-LIMIT-MASK | (timeout ? 0 : CONFIG3-ILIM-CONFIG))
 
   /**
-  Sets the bits of $set in $REG-DEV-CONFIG3 and clears those of $clear.
+  Runs or stops the ADC.
+
+  Nothing is converted until this is on: out of reset $CONFIG5-ADC-EN is
+    clear and every result register reads 0. Wait $ADC-ROUND-ROBIN-TIME after
+    switching it on before believing the first readings.
+
+  Costs three frames, being a read-modify-write of $REG-DEV-CONFIG5. That
+    register also holds the fault latching and auto retry settings, which are
+    read back and written out again untouched.
+  */
+  set-adc --enabled/bool -> none:
+    update-register_ REG-DEV-CONFIG5
+        --set=(enabled ? CONFIG5-ADC-EN : 0)
+        --clear=(enabled ? 0 : CONFIG5-ADC-EN)
+        --mask=CONFIG5-WRITABLE-MASK
+
+  /** Whether the ADC is running. Costs two frames. See $set-adc. */
+  adc-enabled -> bool:
+    return ((read-register REG-DEV-CONFIG5) & CONFIG5-ADC-EN) != 0
+
+  /**
+  Reads the raw current sense conversion of $channel.
+
+  Returns a 10-bit result, running to $ADC-FULL-SCALE-10-BIT. Pass it to
+    $adc-milli-amps for a current. Costs four frames, two per register: the
+    top eight bits and the bottom two live apart.
+
+  A conversion this method assembles can straddle two rounds of the ADC, the
+    low bits having been replaced between the two reads. That moves the
+    result by less than one step of the eight bits above them, which is
+    13 mA with a 1 kOhm `RSNS`. Read the register in $ADC-CURRENT-REGISTERS
+    yourself for those eight bits alone, in half the frames, if that matters
+    more than the resolution.
+  */
+  read-current-raw channel/int -> int:
+    check-channel_ channel
+    msb := read-register ADC-CURRENT-REGISTERS[channel - 1]
+    lsb := read-register ADC-CURRENT-LSB-REGISTERS[channel - 1]
+    return (msb << 2) | (lsb & 0x03)
+
+  /**
+  Reads the current through $channel, in milliamps.
+
+  Converts what $read-current-raw returns; see there for what it costs and
+    when it holds, and $adc-milli-amps for $sense-resistor and $sense-ratio.
+  */
+  read-current channel/int
+      --sense-resistor/float=DEFAULT-SENSE-RESISTOR-OHMS
+      --sense-ratio/int=SENSE-RATIO -> float:
+    return adc-milli-amps (read-current-raw channel)
+        --sense-resistor=sense-resistor
+        --sense-ratio=sense-ratio
+
+  /**
+  Reads the raw temperature conversion of $channel.
+
+  Returns an 8-bit result, running to $ADC-FULL-SCALE-8-BIT. Pass it to
+    $adc-celsius for a temperature. Costs two frames.
+  */
+  read-temperature-raw channel/int -> int:
+    check-channel_ channel
+    return read-register ADC-TEMPERATURE-REGISTERS[channel - 1]
+
+  /**
+  Reads the junction temperature of $channel, in degrees Celsius.
+
+  Measured in the FET, so it reads high on a channel carrying current. Unlike
+    the current and the output voltage it means something whether the channel
+    is on or off.
+  */
+  read-temperature channel/int -> float:
+    return adc-celsius (read-temperature-raw channel)
+
+  /**
+  Reads the raw output voltage conversion of $channel.
+
+  Returns an 8-bit result, running to $ADC-FULL-SCALE-8-BIT. Pass it to
+    $adc-volts for a voltage. Costs two frames.
+  */
+  read-output-voltage-raw channel/int -> int:
+    check-channel_ channel
+    return read-register ADC-OUTPUT-VOLTAGE-REGISTERS[channel - 1]
+
+  /**
+  Reads the output voltage of $channel, in volts.
+
+  Reads near the supply voltage on a channel that is on and near zero on one
+    that is off, so an output sitting between the two is a load pulling
+    against a switch that is not fully on.
+  */
+  read-output-voltage channel/int -> float:
+    return adc-volts (read-output-voltage-raw channel) --full-scale=ADC-FULL-SCALE-8-BIT
+
+  /**
+  Reads the raw supply voltage conversion.
+
+  Returns a 10-bit result, running to $ADC-FULL-SCALE-10-BIT. Pass it to
+    $adc-volts for a voltage. Costs four frames, and can straddle two rounds
+    of the ADC the way $read-current-raw can.
+  */
+  read-supply-voltage-raw -> int:
+    msb := read-register REG-ADC-RESULT-VS
+    lsb := read-register REG-ADC-RESULT-VS-LSB
+    return (msb << 2) | (lsb & 0x03)
+
+  /**
+  Reads the supply voltage, in volts.
+
+  This is VS as the device sees it, which is what $GLOBAL-VS-UV-WRN and
+    $GLOBAL-VS-UV are raised against.
+  */
+  read-supply-voltage -> float:
+    return adc-volts read-supply-voltage-raw --full-scale=ADC-FULL-SCALE-10-BIT
+
+  /**
+  Sets the bits of $set in $register and clears those of $clear.
 
   Costs three frames: two to read the register and one to write it back.
-    Every bit of DEV_CONFIG3 is in use, so there are no reserved ones to
-    mask off the value read.
+
+  $mask says which bits of the value read are worth keeping, and defaults to
+    all of them. Reserved bits read back as ones, so a register that has any
+    must name the ones it does not -- $CONFIG5-WRITABLE-MASK, say -- or the
+    write hands the device a value it never gave.
 
   Setting wins over clearing where the two overlap.
   */
-  update-config3_ --set/int=0 --clear/int=0 -> none:
-    config3 := read-register REG-DEV-CONFIG3
-    write-register REG-DEV-CONFIG3 ((config3 & ~clear) | set)
+  update-register_ register/int --set/int=0 --clear/int=0 --mask/int=0xff -> none:
+    value := (read-register register) & mask
+    write-register register ((value & ~clear) | set)
 
   /**
   Reads and clears the global fault register, $REG-FAULT-GLOBAL-TYPE.

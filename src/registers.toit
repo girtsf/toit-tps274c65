@@ -375,6 +375,152 @@ INRUSH-LIMIT-HALF ::= 2
 /** Limits inrush at a fixed 2.2 A, whatever the `ILIM_REG` setting. */
 INRUSH-LIMIT-FIXED ::= 3
 
+
+// DEV_CONFIG5 ($REG-DEV-CONFIG5) bits. Only the ADC one is named here; the
+// rest of the register is about faults.
+
+/**
+Runs the ADC.
+
+Clear out of reset, so every conversion result reads 0 until this is set.
+  See $ADC-ROUND-ROBIN-TIME for how long the first ones take to appear.
+*/
+CONFIG5-ADC-EN ::= 1 << 5
+/**
+The bits of $REG-DEV-CONFIG5 that are not reserved.
+
+Bits 7 and 6 are, and they read back as ones, so a read-modify-write has to
+  mask them off rather than hand them back.
+*/
+CONFIG5-WRITABLE-MASK ::= 0x3f
+
+// ADC_CONFIG1 ($REG-ADC-CONFIG1) bits. Each drops a whole measurement class
+// from the round robin, shortening it. To drop single channels instead, write
+// a channel mask to $REG-ADC-ISNS-DIS, $REG-ADC-TSNS-DIS or
+// $REG-ADC-VSNS-DIS.
+
+/** Drops the four temperature conversions. */
+ADC1-TSNS-DIS ::= 1 << 3
+/** Drops the four output voltage conversions. */
+ADC1-VSNS-DIS ::= 1 << 2
+/** Drops the four current conversions. */
+ADC1-ISNS-DIS ::= 1 << 1
+/** Drops the supply voltage conversion. */
+ADC1-VS-DIS ::= 1 << 0
+
+/** The internal ADC reference, in millivolts. */
+ADC-REFERENCE-MV ::= 2800
+/** Full scale of a conversion that has an LSB register. */
+ADC-FULL-SCALE-10-BIT ::= 1023
+/** Full scale of a conversion that has none. */
+ADC-FULL-SCALE-8-BIT ::= 255
+/** The voltage a full-scale voltage conversion stands for, in volts. */
+ADC-VOLTAGE-SPAN ::= 30.0
+/** Where a temperature conversion sits, as a fraction of full scale, at 0 degrees. */
+ADC-TEMPERATURE-OFFSET ::= 0.83
+/** How many degrees Celsius a whole temperature scale spans. */
+ADC-TEMPERATURE-SPAN ::= 450.0
+
+/**
+`KSNS`, how many times the load current the SNS pin sources.
+
+The datasheet gives one typical value, 1160, measured on the sense range
+  above 800 mA. It says nothing about the range below it, so a device with
+  $CONFIG3-ISNS-RANGE clear may well need another. See $adc-milli-amps,
+  which takes the ratio as an argument for that reason.
+*/
+SENSE-RATIO ::= 1160
+/**
+`RSNS`, the resistor turning the SNS current into the voltage the ADC reads.
+
+It is external, so the driver cannot know it; this is the 1 kOhm the
+  datasheet recommends. With it the current conversion runs to 3.25 A full
+  scale, which is where the 2.4 A part wants it: TI asks for the largest load
+  current to land around 80% of the range.
+*/
+DEFAULT-SENSE-RESISTOR-OHMS ::= 1000.0
+
+/** How long one conversion takes. */
+ADC-CONVERSION-TIME ::= Duration --us=128
+/**
+How many conversions one round of the ADC makes.
+
+Four currents, four temperatures, four output voltages and the supply
+  voltage, in that order. The `ADC1-*-DIS` bits and the per-channel disable
+  registers take conversions out of the round and shorten it.
+*/
+ADC-ROUND-ROBIN-COUNT ::= 13
+/**
+How long a full round of the ADC takes.
+
+A result register holds whatever the last round put there, so this is how
+  stale a reading can be, and how long to wait after $CONFIG5-ADC-EN goes in
+  before the first one means anything.
+*/
+ADC-ROUND-ROBIN-TIME ::= ADC-CONVERSION-TIME * ADC-ROUND-ROBIN-COUNT
+
+/** The current sense result of each channel, 8 most significant bits, by channel - 1. */
+ADC-CURRENT-REGISTERS/List ::= [
+  REG-ADC-RESULT-CH1-I, REG-ADC-RESULT-CH2-I,
+  REG-ADC-RESULT-CH3-I, REG-ADC-RESULT-CH4-I,
+]
+/** The current sense result of each channel, 2 least significant bits, by channel - 1. */
+ADC-CURRENT-LSB-REGISTERS/List ::= [
+  REG-ADC-RESULT-CH1-I-LSB, REG-ADC-RESULT-CH2-I-LSB,
+  REG-ADC-RESULT-CH3-I-LSB, REG-ADC-RESULT-CH4-I-LSB,
+]
+/** The temperature result of each channel, by channel - 1. */
+ADC-TEMPERATURE-REGISTERS/List ::= [
+  REG-ADC-RESULT-CH1-T, REG-ADC-RESULT-CH2-T,
+  REG-ADC-RESULT-CH3-T, REG-ADC-RESULT-CH4-T,
+]
+/** The output voltage result of each channel, by channel - 1. */
+ADC-OUTPUT-VOLTAGE-REGISTERS/List ::= [
+  REG-ADC-RESULT-CH1-V, REG-ADC-RESULT-CH2-V,
+  REG-ADC-RESULT-CH3-V, REG-ADC-RESULT-CH4-V,
+]
+
+/**
+Returns the load current the current conversion $raw stands for, in milliamps.
+
+Takes a 10-bit conversion, so $ADC-FULL-SCALE-10-BIT is 3.25 A with the
+  default arguments. See `Driver.read-current-raw`.
+
+$sense-resistor is the `RSNS` fitted, in ohms, and defaults to the
+  recommended $DEFAULT-SENSE-RESISTOR-OHMS. $sense-ratio is `KSNS` and
+  defaults to $SENSE-RATIO; see there for when that is the wrong one.
+
+The reading is only meaningful while the channel is on. A channel that has
+  just been switched on reads full scale until the sense current settles, and
+  one whose reverse current is being blocked reads zero.
+*/
+adc-milli-amps raw/int
+    --sense-resistor/float=DEFAULT-SENSE-RESISTOR-OHMS
+    --sense-ratio/int=SENSE-RATIO -> float:
+  return raw * sense-ratio * ADC-REFERENCE-MV / (ADC-FULL-SCALE-10-BIT * sense-resistor)
+
+/**
+Returns the voltage the voltage conversion $raw stands for, in volts.
+
+$full-scale says how wide the conversion is: $ADC-FULL-SCALE-10-BIT for the
+  supply voltage, which has an LSB register, and $ADC-FULL-SCALE-8-BIT for an
+  output voltage, which does not. Both run to $ADC-VOLTAGE-SPAN.
+*/
+adc-volts raw/int --full-scale/int -> float:
+  return ADC-VOLTAGE-SPAN * raw / full-scale
+
+/**
+Returns the junction temperature the conversion $raw stands for, in Celsius.
+
+The temperature falls as the conversion rises, and the scale is wide: one
+  count is nearly 2 degrees. Conversions are 8 bits, so 0 stands for 373
+  degrees and full scale for -76, neither of which the part survives; a
+  result outside its -40 to 150 degree range means the ADC has not run.
+*/
+adc-celsius raw/int -> float:
+  return ADC-TEMPERATURE-SPAN
+      * (ADC-TEMPERATURE-OFFSET - raw.to-float / ADC-FULL-SCALE-8-BIT)
+
 // Structures describing the register map and the fault bits, for code that
 // wants to present them rather than test them.
 
