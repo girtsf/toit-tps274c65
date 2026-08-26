@@ -210,6 +210,84 @@ class Driver:
     else if register == REG-LED5-8-CTL: leds_ = (leds_ & 0x0f) | ((value & 0x0f) << 4)
 
   /**
+  Sets the overcurrent limit of all four channels to $code.
+
+  A channel that draws more than $code is held at the limit and reports
+    $FAULT-ILIMIT, which names itself in $REG-ILIMIT-CH-STAT.
+
+  $inrush gives how long the inrush window lasts. It defaults to
+    $InrushWindow.MS-0, no window, which is the reset state. What the window
+    does is decided by $set-inrush-mode, which this method leaves alone.
+
+  Writes $REG-DEV-CONFIG1 and clears $CONFIG3-ILIM-SET, so that DEV_CONFIG1
+    governs all four channels. Costs four frames: one for the write, three
+    for the read-modify-write of $REG-DEV-CONFIG3. See
+    $set-current-limit-split to give channels 3 and 4 a limit of their own.
+  */
+  set-current-limit code/IlimCode --inrush/InrushWindow=InrushWindow.MS-0 -> none:
+    write-register REG-DEV-CONFIG1 (build-ilim-config code --inrush=inrush)
+    update-config3_ --clear=CONFIG3-ILIM-SET
+
+  /**
+  Sets the overcurrent limit of channels 1 and 2 apart from channels 3 and 4.
+
+  Takes the same arguments as $set-current-limit, twice: $channels-1-2 and
+    $inrush-1-2 go to $REG-DEV-CONFIG1 and cover channels 1 and 2, and
+    $channels-3-4 and $inrush-3-4 go to $REG-DEV-CONFIG2 and cover channels
+    3 and 4.
+
+  Writes both registers before setting $CONFIG3-ILIM-SET, so channels 3 and
+    4 never run against a stale DEV_CONFIG2. Costs five frames: two for the
+    writes, three for the read-modify-write of $REG-DEV-CONFIG3.
+  */
+  set-current-limit-split -> none
+      --channels-1-2/IlimCode
+      --channels-3-4/IlimCode
+      --inrush-1-2/InrushWindow=InrushWindow.MS-0
+      --inrush-3-4/InrushWindow=InrushWindow.MS-0:
+    write-register REG-DEV-CONFIG1 (build-ilim-config channels-1-2 --inrush=inrush-1-2)
+    write-register REG-DEV-CONFIG2 (build-ilim-config channels-3-4 --inrush=inrush-3-4)
+    update-config3_ --set=CONFIG3-ILIM-SET
+
+  /**
+  Sets what the inrush window of $set-current-limit does.
+
+  $limit is one of the `INRUSH-LIMIT-*` constants. Each names a limit that
+    applies during the window only, given as a multiple of the code
+    $set-current-limit was given, except $INRUSH-LIMIT-FIXED which is an
+    absolute 2.2 A. It defaults to $INRUSH-LIMIT-1X, the reset state, which
+    is the same limit inside the window as outside.
+
+  With $timeout false, the default, the window is an inrush period: $limit
+    applies while it lasts and the code afterwards, and $FAULT-ILIMIT is not
+    reported during it. With $timeout true the code applies throughout and
+    $limit is ignored, and the window becomes how long a channel may sit in
+    current limit before its FET switches off, with the fault reported.
+
+  Applies to every channel: $REG-DEV-CONFIG3 has no per-channel fields. Only
+    the duration is per channel pair. Costs three frames, being a
+    read-modify-write of $REG-DEV-CONFIG3.
+  */
+  set-inrush-mode --limit/int=INRUSH-LIMIT-1X --timeout/bool=false -> none:
+    if not 0 <= limit <= CONFIG3-INRUSH-LIMIT-MASK: throw "INVALID_ARGUMENT"
+    update-config3_
+        --set=(limit | (timeout ? CONFIG3-ILIM-CONFIG : 0))
+        --clear=(CONFIG3-INRUSH-LIMIT-MASK | (timeout ? 0 : CONFIG3-ILIM-CONFIG))
+
+  /**
+  Sets the bits of $set in $REG-DEV-CONFIG3 and clears those of $clear.
+
+  Costs three frames: two to read the register and one to write it back.
+    Every bit of DEV_CONFIG3 is in use, so there are no reserved ones to
+    mask off the value read.
+
+  Setting wins over clearing where the two overlap.
+  */
+  update-config3_ --set/int=0 --clear/int=0 -> none:
+    config3 := read-register REG-DEV-CONFIG3
+    write-register REG-DEV-CONFIG3 ((config3 & ~clear) | set)
+
+  /**
   Reads and clears the global fault register, $REG-FAULT-GLOBAL-TYPE.
 
   A fresh device reports $GLOBAL-POR, $GLOBAL-VDD-UVLO, $GLOBAL-VS-UV-WRN

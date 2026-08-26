@@ -12,6 +12,9 @@ main:
   test-set-channel
   test-set-leds
   test-write-switch-state-directly
+  test-set-current-limit
+  test-set-current-limit-split
+  test-set-inrush-mode
 
 /**
 A read has to spend two frames, because the device answers one frame late.
@@ -189,3 +192,84 @@ test-write-switch-state-directly:
   // Reading it back gets those reserved bits as ones, so what comes over the
   // wire is 0xf2 and not 0x02. Confirmed on a real device.
   expect-equals 0xf2 (driver.read-register REG-SW-STATE)
+
+/**
+The current limit of all four channels is DEV_CONFIG1 plus a clear ILIM_SET.
+
+ILIM_SET is already clear out of reset, so the read-modify-write of
+  DEV_CONFIG3 puts back what it found. It still costs its three frames: the
+  driver keeps no copy of the register and has to ask.
+*/
+test-set-current-limit:
+  device := FakeDevice
+  driver := Driver device
+
+  driver.set-current-limit IlimCode.MA-2200
+  expect-equals 4 device.frames.size
+  expect-equals #[0x80 | REG-DEV-CONFIG1, 0x0f] device.frames[0]
+  // Frames 1 and 2 read DEV_CONFIG3 -- reads take two -- and frame 3 writes
+  // it back with ILIM_SET clear, which is where it already was.
+  expect-equals #[REG-DEV-CONFIG3, 0x00] device.frames[1]
+  expect-equals #[0x80 | REG-DEV-CONFIG3, 0x00] device.frames[3]
+
+  // The inrush window shares the register, in the top nibble.
+  driver.set-current-limit IlimCode.MA-1000 --inrush=InrushWindow.MS-6
+  expect-equals #[0x80 | REG-DEV-CONFIG1, 0x38] device.frames[4]
+  expect-equals 0x38 device.contents[REG-DEV-CONFIG1]
+
+/**
+Splitting the limit sets ILIM_SET, and only after both registers are written.
+
+Channels 3 and 4 switch over to DEV_CONFIG2 the moment ILIM_SET goes in, so
+  writing it first would run them against whatever DEV_CONFIG2 held before.
+*/
+test-set-current-limit-split:
+  device := FakeDevice
+  driver := Driver device
+
+  driver.set-current-limit-split
+      --channels-1-2=IlimCode.MA-400
+      --channels-3-4=IlimCode.MA-2200
+      --inrush-3-4=InrushWindow.MS-2
+  expect-equals 5 device.frames.size
+  expect-equals #[0x80 | REG-DEV-CONFIG1, 0x02] device.frames[0]
+  expect-equals #[0x80 | REG-DEV-CONFIG2, 0x1f] device.frames[1]
+  expect-equals #[0x80 | REG-DEV-CONFIG3, CONFIG3-ILIM-SET] device.frames[4]
+
+  // Going back to one limit for all four channels clears the bit again, and
+  // the read in the middle is what finds it set.
+  driver.set-current-limit IlimCode.MA-1250
+  expect-equals 9 device.frames.size
+  expect-equals #[0x80 | REG-DEV-CONFIG1, 0x0a] device.frames[5]
+  expect-equals #[0x80 | REG-DEV-CONFIG3, 0x00] device.frames[8]
+  expect-equals 0x00 device.contents[REG-DEV-CONFIG3]
+
+/**
+DEV_CONFIG3 is read back before it is written, keeping the bits not asked about.
+
+Each call reads what the device really holds, so the bits set by the call
+  before it survive without the driver having to remember them.
+*/
+test-set-inrush-mode:
+  device := FakeDevice
+  driver := Driver device
+
+  // A bit of DEV_CONFIG3 that has nothing to do with the inrush window.
+  driver.write-register REG-DEV-CONFIG3 CONFIG3-RCB-DIS
+
+  driver.set-inrush-mode --limit=INRUSH-LIMIT-2X
+  expect-equals 4 device.frames.size
+  expect-equals #[0x80 | REG-DEV-CONFIG3, CONFIG3-RCB-DIS | INRUSH-LIMIT-2X]
+      device.frames[3]
+
+  // The timeout flag lives in the same register, and the limit code goes
+  // away with it. RCB_DIS stays, having been read back.
+  driver.set-inrush-mode --timeout
+  expect-equals #[0x80 | REG-DEV-CONFIG3, CONFIG3-RCB-DIS | CONFIG3-ILIM-CONFIG]
+      device.frames[6]
+
+  driver.set-inrush-mode --limit=INRUSH-LIMIT-HALF
+  expect-equals #[0x80 | REG-DEV-CONFIG3, CONFIG3-RCB-DIS | INRUSH-LIMIT-HALF]
+      device.frames[9]
+
+  expect-throw "INVALID_ARGUMENT": driver.set-inrush-mode --limit=4

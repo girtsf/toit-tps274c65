@@ -6,7 +6,8 @@ high-side switch with SPI control and diagnostics.
 
 The driver speaks only the **16-bit daisy-chain** frame format (`DSPI` tied
 high). It assumes **one device per chip select**, so one frame per chip-select
-pulse.
+pulse. It also assumes the **AS** part where the variants differ
+(current-limits table).
 
 See `examples/*.toit`.
 

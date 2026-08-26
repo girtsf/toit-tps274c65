@@ -152,6 +152,229 @@ GLOBAL-VS-UV-WRN ::= 1 << 1
 /** VS dropped below the undervoltage protection threshold. */
 GLOBAL-VS-UV ::= 1 << 0
 
+// DEV_CONFIG1 ($REG-DEV-CONFIG1) and DEV_CONFIG2 ($REG-DEV-CONFIG2) fields.
+//
+// The two registers share a layout. DEV_CONFIG1 configures channels 1 and 2
+// and DEV_CONFIG2 channels 3 and 4, but DEV_CONFIG2 is only consulted when
+// $CONFIG3-ILIM-SET is set; otherwise DEV_CONFIG1 governs all four channels.
+
+/** Mask of `ILIM_REG`, the current limit code. See the `ILIM-AS-*-MA` constants. */
+ILIM-REG-MASK ::= 0x0f
+/** Mask of `ILIM_DURATION`, the inrush window code. See the `INRUSH-*-MS` constants. */
+ILIM-DURATION-MASK ::= 0xf0
+/** How far up `ILIM_DURATION` sits. See $ILIM-DURATION-MASK. */
+ILIM-DURATION-SHIFT ::= 4
+
+/**
+A current limit a channel can be configured with.
+
+The instances are the sixteen limits the `ILIM_REG` field can select, and
+  there are no others: the constructor is private, so a limit cannot be
+  invented and `Driver.set-current-limit` cannot be handed a plain integer
+  or an $InrushWindow by mistake. The two fields share a byte and both run 0 to
+  15, which is exactly the confusion the types rule out.
+
+The limits are the ones the AS part uses. The BS part codes them the same
+  way; the ASH part does not, and these constants would name the wrong
+  current on one. See the README.
+*/
+class IlimCode:
+  /** The `ILIM_REG` code selecting this limit. See $ILIM-REG-MASK. */
+  value/int
+  /** The typical limit, in milliamps. See $MA-250 for how wide the tolerance is. */
+  milli-amps/int
+
+  constructor.private_ .value .milli-amps:
+
+  /**
+  Returns the lowest limit that is at least $milli-amps.
+
+  Rounds up, so a channel is never limited below the current asked for.
+    Throws if $milli-amps is above $MA-2200, the highest limit there is.
+
+  Only needed for a current that is not known until runtime. A limit chosen
+    while writing the code is better named by its constant.
+  */
+  constructor.at-least milli-amps/int:
+    ALL.do: | code/IlimCode | if code.milli-amps >= milli-amps: return code
+    throw "INVALID_ARGUMENT"
+
+  /**
+  Limits at 0.25 A.
+
+  The names carry the typical limit and the tolerance around it is wide: the
+    datasheet gives 0.19 A to 0.33 A for this one and 1.85 A to 2.55 A for
+    $MA-2200. Size the margins accordingly.
+  */
+  static MA-250 ::= IlimCode.private_ 0x0 250
+  /** Limits at 0.33 A. See $MA-250. */
+  static MA-330 ::= IlimCode.private_ 0x1 330
+  /** Limits at 0.40 A. See $MA-250. */
+  static MA-400 ::= IlimCode.private_ 0x2 400
+  /** Limits at 0.48 A. See $MA-250. */
+  static MA-480 ::= IlimCode.private_ 0x3 480
+  /** Limits at 0.56 A. See $MA-250. */
+  static MA-560 ::= IlimCode.private_ 0x4 560
+  /** Limits at 0.67 A. See $MA-250. */
+  static MA-670 ::= IlimCode.private_ 0x5 670
+  /** Limits at 0.72 A. See $MA-250. */
+  static MA-720 ::= IlimCode.private_ 0x6 720
+  /** Limits at 0.85 A. See $MA-250. */
+  static MA-850 ::= IlimCode.private_ 0x7 850
+  /** Limits at 1.00 A. See $MA-250. */
+  static MA-1000 ::= IlimCode.private_ 0x8 1000
+  /** Limits at 1.10 A. See $MA-250. */
+  static MA-1100 ::= IlimCode.private_ 0x9 1100
+  /** Limits at 1.25 A. The reset value on every channel. See $MA-250. */
+  static MA-1250 ::= IlimCode.private_ 0xa 1250
+  /** Limits at 1.50 A. See $MA-250. */
+  static MA-1500 ::= IlimCode.private_ 0xb 1500
+  /** Limits at 1.60 A. See $MA-250. */
+  static MA-1600 ::= IlimCode.private_ 0xc 1600
+  /** Limits at 1.75 A. See $MA-250. */
+  static MA-1750 ::= IlimCode.private_ 0xd 1750
+  /** Limits at 1.90 A. See $MA-250. */
+  static MA-1900 ::= IlimCode.private_ 0xe 1900
+  /** Limits at 2.20 A. See $MA-250. */
+  static MA-2200 ::= IlimCode.private_ 0xf 2200
+
+  /** Every limit, indexed by its $value. */
+  static ALL/List ::= [
+    MA-250, MA-330, MA-400, MA-480, MA-560, MA-670, MA-720, MA-850,
+    MA-1000, MA-1100, MA-1250, MA-1500, MA-1600, MA-1750, MA-1900, MA-2200,
+  ]
+
+  stringify -> string: return "$(%.2f milli-amps / 1000.0) A"
+
+/**
+An inrush window a channel pair can be configured with.
+
+The instances are the sixteen windows the `ILIM_DURATION` field can select.
+  See $IlimCode for why they are a type rather than plain integers, and
+  `Driver.set-inrush-mode` for what the window does.
+*/
+class InrushWindow:
+  /** The `ILIM_DURATION` code selecting this window. See $ILIM-DURATION-MASK. */
+  value/int
+  /** How long the window lasts, in milliseconds. */
+  ms/int
+
+  constructor.private_ .value .ms:
+
+  /**
+  Returns the shortest window lasting at least $ms.
+
+  Rounds up. Throws if $ms is longer than $MS-64.
+  */
+  constructor.at-least ms/int:
+    ALL.do: | window/InrushWindow | if window.ms >= ms: return window
+    throw "INVALID_ARGUMENT"
+
+  /** No window at all. The reset value on every channel. */
+  static MS-0 ::= InrushWindow.private_ 0x0 0
+  /** A window of 2 ms. */
+  static MS-2 ::= InrushWindow.private_ 0x1 2
+  /** A window of 4 ms. */
+  static MS-4 ::= InrushWindow.private_ 0x2 4
+  /** A window of 6 ms. */
+  static MS-6 ::= InrushWindow.private_ 0x3 6
+  /** A window of 8 ms. */
+  static MS-8 ::= InrushWindow.private_ 0x4 8
+  /** A window of 10 ms. */
+  static MS-10 ::= InrushWindow.private_ 0x5 10
+  /** A window of 12 ms. */
+  static MS-12 ::= InrushWindow.private_ 0x6 12
+  /** A window of 16 ms. */
+  static MS-16 ::= InrushWindow.private_ 0x7 16
+  /** A window of 20 ms. */
+  static MS-20 ::= InrushWindow.private_ 0x8 20
+  /** A window of 24 ms. */
+  static MS-24 ::= InrushWindow.private_ 0x9 24
+  /** A window of 28 ms. */
+  static MS-28 ::= InrushWindow.private_ 0xa 28
+  /** A window of 32 ms. */
+  static MS-32 ::= InrushWindow.private_ 0xb 32
+  /** A window of 40 ms. */
+  static MS-40 ::= InrushWindow.private_ 0xc 40
+  /** A window of 48 ms. */
+  static MS-48 ::= InrushWindow.private_ 0xd 48
+  /** A window of 56 ms. */
+  static MS-56 ::= InrushWindow.private_ 0xe 56
+  /** A window of 64 ms. */
+  static MS-64 ::= InrushWindow.private_ 0xf 64
+
+  /** Every window, indexed by its $value. */
+  static ALL/List ::= [
+    MS-0, MS-2, MS-4, MS-6, MS-8, MS-10, MS-12, MS-16,
+    MS-20, MS-24, MS-28, MS-32, MS-40, MS-48, MS-56, MS-64,
+  ]
+
+  stringify -> string: return "$ms ms"
+
+/**
+Builds the $REG-DEV-CONFIG1 or $REG-DEV-CONFIG2 value selecting $code.
+
+$inrush gives how long the inrush window lasts. It defaults to
+  $InrushWindow.MS-0, no window, which is the reset state. What the window
+  does is decided by $CONFIG3-ILIM-CONFIG and $CONFIG3-INRUSH-LIMIT-MASK.
+
+Needs no range checking: $IlimCode and $InrushWindow have no instances that
+  do not fit their fields.
+*/
+build-ilim-config code/IlimCode --inrush/InrushWindow=InrushWindow.MS-0 -> int:
+  return (inrush.value << ILIM-DURATION-SHIFT) | code.value
+
+// DEV_CONFIG3 ($REG-DEV-CONFIG3) bits. This register is device wide: it holds
+// no per-channel fields, only ones that apply to every channel at once.
+
+/**
+Disables reverse current blocking on all channels.
+
+Set this when no external RCB FETs are fitted, and leave the RCB pins
+  floating. Not functional on the BS part, which has no RCB at all.
+*/
+CONFIG3-RCB-DIS ::= 1 << 7
+/**
+Gives channels 3 and 4 their own current limit.
+
+When set, channels 1 and 2 take their limit from $REG-DEV-CONFIG1 and
+  channels 3 and 4 from $REG-DEV-CONFIG2. When clear, $REG-DEV-CONFIG1
+  governs all four and $REG-DEV-CONFIG2 is ignored.
+*/
+CONFIG3-ILIM-SET ::= 1 << 6
+/** Selects the current sense range above 800 mA rather than up to it. Not functional on BS. */
+CONFIG3-ISNS-RANGE ::= 1 << 5
+/** Channels 3 and 4 are wired in parallel. See $CONFIG3-PARALLEL-12. */
+CONFIG3-PARALLEL-34 ::= 1 << 4
+/**
+Channels 1 and 2 are wired in parallel, roughly halving their on resistance.
+
+The paralleling bits may only be written while all four bits of
+  $REG-SW-STATE are zero, and not in a frame that sets one of them.
+*/
+CONFIG3-PARALLEL-12 ::= 1 << 3
+/**
+Turns the `ILIM_DURATION` window into a current limit timeout.
+
+When clear the window is an inrush period: $CONFIG3-INRUSH-LIMIT-MASK picks
+  the limit that applies during it, and $FAULT-ILIMIT is not reported while
+  it lasts. When set the limit stays at the `ILIM_REG` setting throughout,
+  the window becomes how long a channel may sit in current limit before its
+  FET is switched off, and the fault is reported.
+*/
+CONFIG3-ILIM-CONFIG ::= 1 << 2
+/** Mask of `INRUSH_LIMIT`, the limit during the inrush window. See the `INRUSH-LIMIT-*` codes. */
+CONFIG3-INRUSH-LIMIT-MASK ::= 0x03
+
+/** Limits inrush at the `ILIM_REG` setting, so the limit never changes. */
+INRUSH-LIMIT-1X ::= 0
+/** Limits inrush at twice the `ILIM_REG` setting. For incandescent lamps and other high-inrush loads. */
+INRUSH-LIMIT-2X ::= 1
+/** Limits inrush at half the `ILIM_REG` setting. For charging large capacitive loads. */
+INRUSH-LIMIT-HALF ::= 2
+/** Limits inrush at a fixed 2.2 A, whatever the `ILIM_REG` setting. */
+INRUSH-LIMIT-FIXED ::= 3
+
 // Structures describing the register map and the fault bits, for code that
 // wants to present them rather than test them.
 
