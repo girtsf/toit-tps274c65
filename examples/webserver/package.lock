@@ -1,0 +1,11 @@
+sdk: ^2.0.0-alpha.195
+prefixes:
+  http: github.com/toitlang/pkg-http-2
+  tps274c65: toit-tps274c65
+packages:
+  github.com/toitlang/pkg-http-2:
+    hash: 9edcd6a560f2128bca3680816ee9f28fe4d54df7
+    url: github.com/toitlang/pkg-http
+    version: 2.14.0
+  toit-tps274c65:
+    path: ../..

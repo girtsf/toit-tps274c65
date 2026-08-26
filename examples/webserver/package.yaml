@@ -1,0 +1,7 @@
+dependencies:
+  tps274c65:
+    path: ../..
+  http:
+    url: github.com/toitlang/pkg-http
+    version: ^2.14.0
+sdk: ^2.0.0-alpha.195

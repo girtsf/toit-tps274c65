@@ -8,6 +8,7 @@ install-pkgs:
 	$(TOIT) pkg install
 	cd tests && $(TOIT) pkg install
 	cd examples && $(TOIT) pkg install
+	cd examples/webserver && $(TOIT) pkg install
 
 test: install-pkgs
 	@cd tests && for test in *-test.toit; do \
@@ -19,5 +20,6 @@ analyze: install-pkgs
 	$(TOIT) analyze src/*.toit
 	cd tests && $(TOIT) analyze *-test.toit
 	cd examples && $(TOIT) analyze *.toit
+	cd examples/webserver && $(TOIT) analyze *.toit
 
 .PHONY: all install-pkgs test analyze

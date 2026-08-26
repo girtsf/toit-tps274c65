@@ -10,11 +10,26 @@ pulse.
 
 See `examples/*.toit`.
 
+You can `jag run examples/webserver/main.toit` to start a web UI that shows the
+switch state and decoded faults and lets you poke at registers.
+
+![The web UI](examples/webserver/screenshot.png)
+
 ## Development
 
 ```sh
 make test      # Run the unit tests.
 make analyze   # Type-check src, tests and examples.
+```
+
+The screenshot above is taken by `examples/webserver/screenshot.sh`, which
+serves the UI on the fake device the driver tests use, drives it with
+[shot-scraper](https://shot-scraper.datasette.io/) and shoots the result. Run
+it after changing the UI. It runs shot-scraper through `uvx`, so only the
+headless browser has to be installed first:
+
+```sh
+uvx shot-scraper install
 ```
 
 ## Notes on TPS274C65
