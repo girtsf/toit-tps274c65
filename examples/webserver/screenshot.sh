@@ -66,6 +66,9 @@ uvx shot-scraper shot "$URL" \
   selectRegister(0x21);
   document.getElementById("val").value = "0a";
   doWrite();                                     await settle();
+  // Open the current-limit box, which reads it. Collapsed is its default,
+  // but a collapsed box makes for a picture of nothing.
+  document.querySelector("details").open = true; await settle();
 })()
 JS
 )" \

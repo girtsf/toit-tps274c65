@@ -24,6 +24,9 @@ ul { list-style: none; padding: 0; margin: .6rem 0 0; }
 li { padding: .3rem .5rem; border-radius: 4px; margin-bottom: .25rem; }
 li.bad { background: #fff1f0; border-left: 3px solid #cf222e; }
 li.ok { background: #f2fbf4; border-left: 3px solid #1a7f37; color: #555; }
+summary { cursor: pointer; }
+summary h2 { display: inline; margin: 0; }
+.field { color: #666; font-size: .85rem; min-width: 9.5rem; }
 .note { color: #666; font-size: .85rem; margin: .6rem 0 0; }
 .sub { color: #666; margin: .2rem 0 0; font-size: .85rem; }
 .sub.bad { color: #cf222e; }

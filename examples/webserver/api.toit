@@ -61,6 +61,10 @@ class Ui:
   route_ resource/string request/http.RequestIncoming -> any:
     if resource == "/": return PAGE
     if resource == "/api/registers": return {"registers": registers-payload}
+    if resource == "/api/options": return options-payload
+    if resource == "/api/limits":
+      if request.method == http.GET: return read-limits_
+      return write-limits_ (json.decode-stream request.body)
     if resource == "/api/state": return state_
     if resource == "/api/global-faults":
       json.decode-stream request.body  // Drain the empty body.
@@ -129,6 +133,76 @@ class Ui:
     mutex_.do: driver_.write-register address value
     return with-register_ address value --written
 
+  /**
+  Reads the three registers behind the current-limit box.
+
+  All three are plain `RW`, so this has no side effects. Costs six frames,
+    two per read, which is why the page asks for it rather than polling it.
+  */
+  read-limits_ -> Map:
+    config1 := 0
+    config2 := 0
+    config3 := 0
+    mutex_.do:
+      config1 = driver_.read-register tps274c65.REG-DEV-CONFIG1
+      config2 = driver_.read-register tps274c65.REG-DEV-CONFIG2
+      config3 = driver_.read-register tps274c65.REG-DEV-CONFIG3
+    return with-limits_ config1 config2 config3 --no-written
+
+  /**
+  Puts the current limits in $payload back on the device.
+
+  Goes through the driver rather than writing the three registers directly,
+    so `DEV_CONFIG3` keeps the bits this box is not about -- `RCB_DIS`,
+    `ISNS_RANGE` and the paralleling bits -- and so `ILIM_SET` is set only
+    after the register it switches to has been written.
+
+  `DEV_CONFIG2` is left alone unless the limits are split. It is what
+    `ILIM_SET` selects, and nothing reads it while that bit is clear.
+
+  Answers with a fresh read, so the page shows what the device took rather
+    than what it was sent.
+  */
+  write-limits_ payload/Map -> Map:
+    ilim-12 := tps274c65.IlimCode.ALL[payload["ilim12"]]
+    ilim-34 := tps274c65.IlimCode.ALL[payload["ilim34"]]
+    inrush-12 := tps274c65.InrushWindow.ALL[payload["inrush12"]]
+    inrush-34 := tps274c65.InrushWindow.ALL[payload["inrush34"]]
+    split/bool := payload["split"]
+    mutex_.do:
+      driver_.set-inrush-mode
+          --limit=payload["inrushLimit"]
+          --timeout=payload["timeout"]
+      if split:
+        driver_.set-current-limit-split
+            --channels-1-2=ilim-12
+            --channels-3-4=ilim-34
+            --inrush-1-2=inrush-12
+            --inrush-3-4=inrush-34
+      else:
+        driver_.set-current-limit ilim-12 --inrush=inrush-12
+    result := read-limits_
+    result["limits"]["written"] = true
+    return result
+
+  /** Returns $state_ with the decoded current-limit configuration attached. */
+  with-limits_ config1/int config2/int config3/int --written/bool -> Map:
+    result := state_
+    result["limits"] = {
+      "config1": config1,
+      "config2": config2,
+      "config3": config3,
+      "ilim12": config1 & tps274c65.ILIM-REG-MASK,
+      "ilim34": config2 & tps274c65.ILIM-REG-MASK,
+      "inrush12": (config1 & tps274c65.ILIM-DURATION-MASK) >> tps274c65.ILIM-DURATION-SHIFT,
+      "inrush34": (config2 & tps274c65.ILIM-DURATION-MASK) >> tps274c65.ILIM-DURATION-SHIFT,
+      "split": (config3 & tps274c65.CONFIG3-ILIM-SET) != 0,
+      "timeout": (config3 & tps274c65.CONFIG3-ILIM-CONFIG) != 0,
+      "inrushLimit": config3 & tps274c65.CONFIG3-INRUSH-LIMIT-MASK,
+      "written": written,
+    }
+    return result
+
   /** Returns $state_ with the result of a register access attached. */
   with-register_ address/int value/int --written/bool -> Map:
     result := state_
@@ -150,6 +224,35 @@ registers-payload -> List:
       "description": register.description,
       "access": register.access,
     }
+
+/**
+The `INRUSH_LIMIT` codes, by code, as the current-limit box labels them.
+
+The driver has the codes as constants but nothing to render them with, these
+  four being the only place they show up.
+*/
+INRUSH-LIMIT-LABELS ::= [
+  "1x the limit",
+  "2x the limit",
+  "0.5x the limit",
+  "fixed 2.2 A",
+]
+
+/** Returns the tables the current-limit box fills its pickers from. */
+options-payload -> Map:
+  ilim-codes := tps274c65.IlimCode.ALL.map: | code/tps274c65.IlimCode |
+    {"value": code.value, "label": "$code"}
+  windows := tps274c65.InrushWindow.ALL.map: | window/tps274c65.InrushWindow |
+    {"value": window.value, "label": window.value == 0 ? "no window" : "$window"}
+  inrush-limits := []
+  INRUSH-LIMIT-LABELS.size.repeat:
+    entry := {"value": it, "label": INRUSH-LIMIT-LABELS[it]}
+    inrush-limits.add entry
+  return {
+    "ilimCodes": ilim-codes,
+    "inrushWindows": windows,
+    "inrushLimits": inrush-limits,
+  }
 
 /** Returns the JSON form of the $tps274c65.FaultBit entries in $bits. */
 bits-payload bits/List -> List:

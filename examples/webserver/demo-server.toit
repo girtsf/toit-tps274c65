@@ -26,6 +26,10 @@ main:
   device.faults = tps274c65.FAULT-SUPPLY | tps274c65.FAULT-ILIMIT | tps274c65.FAULT-GLOBAL
   device.contents[tps274c65.REG-FAULT-GLOBAL-TYPE] = tps274c65.GLOBAL-VS-UV
   device.contents[tps274c65.REG-ILIMIT-CH-STAT] = 0b0010  // Channel 2.
+  // The reset values of the current-limit registers, so the box that reads
+  // them has something real to show.
+  device.contents[tps274c65.REG-DEV-CONFIG1] = 0x0a
+  device.contents[tps274c65.REG-DEV-CONFIG2] = 0x0a
   device.read-to-clear.add tps274c65.REG-FAULT-GLOBAL-TYPE
   device.read-to-clear.add tps274c65.REG-ILIMIT-CH-STAT
   driver := tps274c65.Driver device

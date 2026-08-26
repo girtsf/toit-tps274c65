@@ -54,6 +54,52 @@ when you ask. Everything else here refreshes once a second.</p>
 <pre id="log"></pre>
 </section>
 
+<section>
+<details ontoggle="if (this.open) readLimits()">
+<summary><h2>Current limits</h2></summary>
+
+<div class="row">
+<button onclick="readLimits()">read current values</button>
+<span class="mono" id="limits-raw">not read</span>
+</div>
+
+<div class="row">
+<span class="field">channels 1 and 2</span>
+<select id="ilim12"></select>
+<select id="inrush12"></select>
+</div>
+
+<div class="row">
+<span class="field"><label><input type="checkbox" id="split"> split 3 and 4</label></span>
+<select id="ilim34"></select>
+<select id="inrush34"></select>
+</div>
+
+<div class="row">
+<span class="field">the window is</span>
+<select id="timeout">
+<option value="0">an inrush period, fault hidden</option>
+<option value="1">time allowed in limit, fault reported</option>
+</select>
+</div>
+
+<div class="row">
+<span class="field">limit in the window</span>
+<select id="inrush-limit"></select>
+</div>
+
+<div class="row" style="margin-top:.8rem">
+<button id="limits-write" onclick="writeLimits()" disabled>write</button>
+</div>
+
+<p class="note">Split gives channels 3 and 4 a limit of their own, in
+DEV_CONFIG2; without it DEV_CONFIG1 governs all four and DEV_CONFIG2 is left
+alone. Writing goes through the driver, so the DEV_CONFIG3 bits this box does
+not show -- RCB_DIS, ISNS_RANGE, paralleling -- survive it. The limits are the
+ones an AS or BS part selects; an ASH part codes them differently.</p>
+</details>
+</section>
+
 <script>
 $SCRIPT</script>
 </body>

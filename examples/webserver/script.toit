@@ -12,6 +12,9 @@ Watch out for dollar signs when editing: they start a string interpolation in
 SCRIPT ::= """
 var state = null;
 var registers = [];
+// The current-limit configuration the last read returned, or null before
+// there has been one. What the write button diffs against.
+var limits = null;
 
 function hex2(value) { return "0x" + pad2(value.toString(16)); }
 
@@ -85,6 +88,7 @@ function update(data, source) {
     logLine("global " + hex2(data.globalFaults) + "  " +
             bitNames(data.globalFaultBits));
   }
+  if (data.limits) applyLimits(data.limits);
   var access = data.register;
   if (access) {
     logLine((access.written ? "write " : "read  ") + hex2(access.address) + " " +
@@ -140,6 +144,94 @@ function renderBits(id, bits, emptyText) {
     list.appendChild(item);
   });
 }
+
+// The current-limit box. Its selects are built once from the tables the
+// device driver knows, and stay empty of values until a read fills them in:
+// nothing here is polled, so the page cannot show a limit it has not read.
+function buildLimitOptions(data) {
+  fillSelect("ilim12", data.ilimCodes);
+  fillSelect("ilim34", data.ilimCodes);
+  fillSelect("inrush12", data.inrushWindows);
+  fillSelect("inrush34", data.inrushWindows);
+  fillSelect("inrush-limit", data.inrushLimits);
+  limitFields().forEach(function (id) {
+    document.getElementById(id).onchange = limitsChanged;
+  });
+  limitsChanged();
+}
+
+function fillSelect(id, entries) {
+  var select = document.getElementById(id);
+  entries.forEach(function (entry) {
+    var option = document.createElement("option");
+    option.value = entry.value;
+    option.textContent = entry.label;
+    select.appendChild(option);
+  });
+}
+
+function limitFields() {
+  return ["ilim12", "inrush12", "ilim34", "inrush34", "split", "timeout",
+          "inrush-limit"];
+}
+
+// What the controls currently say, in the shape the API takes.
+function limitsForm() {
+  function value(id) { return Number(document.getElementById(id).value); }
+  return {
+    ilim12: value("ilim12"),
+    inrush12: value("inrush12"),
+    ilim34: value("ilim34"),
+    inrush34: value("inrush34"),
+    split: document.getElementById("split").checked,
+    timeout: value("timeout") === 1,
+    inrushLimit: value("inrush-limit")
+  };
+}
+
+function applyLimits(data) {
+  limits = data;
+  document.getElementById("ilim12").value = data.ilim12;
+  document.getElementById("inrush12").value = data.inrush12;
+  document.getElementById("ilim34").value = data.ilim34;
+  document.getElementById("inrush34").value = data.inrush34;
+  document.getElementById("split").checked = data.split;
+  document.getElementById("timeout").value = data.timeout ? 1 : 0;
+  document.getElementById("inrush-limit").value = data.inrushLimit;
+  document.getElementById("limits-raw").textContent =
+      "DEV_CONFIG1 " + hex2(data.config1) + "  DEV_CONFIG2 " + hex2(data.config2) +
+      "  DEV_CONFIG3 " + hex2(data.config3);
+  limitsChanged();
+  logLine((data.written ? "write " : "read  ") + "limits  " +
+          document.getElementById("ilim12").selectedOptions[0].textContent +
+          (data.split ? " / " +
+              document.getElementById("ilim34").selectedOptions[0].textContent : ""));
+}
+
+// Greys out what does not apply, and offers the write button only once the
+// form says something other than what was read back.
+function limitsChanged() {
+  var form = limitsForm();
+  document.getElementById("ilim34").disabled = !form.split;
+  document.getElementById("inrush34").disabled = !form.split;
+  document.getElementById("inrush-limit").disabled = form.timeout;
+  var dirty = limits !== null && Object.keys(form).some(function (key) {
+    // A field that does not apply is not a change worth a write.
+    if (!form.split && (key === "ilim34" || key === "inrush34")) return false;
+    if (form.timeout && key === "inrushLimit") return false;
+    return form[key] !== limits[key];
+  });
+  document.getElementById("limits-write").disabled = !dirty;
+}
+
+// Opening the box reads, and that can happen before the pickers have been
+// built -- so wait for them. Setting a select that has no options yet would
+// leave the form saying something the device never said.
+function readLimits() {
+  optionsReady.then(function () { act(api("/api/limits")); });
+}
+
+function writeLimits() { act(api("/api/limits", limitsForm())); }
 
 function buildChannels() {
   var row = document.getElementById("channels");
@@ -268,6 +360,8 @@ function poll() {
 
 buildChannels();
 api("/api/registers").then(function (data) { buildRegisters(data.registers); }).catch(fail);
+var optionsReady = api("/api/options").then(buildLimitOptions);
+optionsReady.catch(fail);
 poll();
 setInterval(poll, 1000);
 """
