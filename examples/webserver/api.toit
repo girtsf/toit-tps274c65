@@ -65,6 +65,9 @@ class Ui:
     if resource == "/api/limits":
       if request.method == http.GET: return read-limits_
       return write-limits_ (json.decode-stream request.body)
+    if resource == "/api/adc":
+      if request.method == http.GET: return read-adc_
+      return set-adc_ (json.decode-stream request.body)["enabled"]
     if resource == "/api/state": return state_
     if resource == "/api/global-faults":
       json.decode-stream request.body  // Drain the empty body.
@@ -183,6 +186,68 @@ class Ui:
         driver_.set-current-limit ilim-12 --inrush=inrush-12
     result := read-limits_
     result["limits"]["written"] = true
+    return result
+
+  /**
+  Reads every ADC result there is, and whether the ADC is running at all.
+
+  All of them are plain `R`, so this has no side effects. It costs 38 frames
+    though -- thirteen conversions, of which the five ten-bit ones take two
+    registers and so four frames each, plus `DEV_CONFIG5` -- which is why the
+    page asks for it only while the box is open.
+
+  Reads nothing when the ADC is off. Every result register would read 0,
+    which is a real temperature and a real voltage, and showing those as
+    measurements would be a lie.
+  */
+  read-adc_ -> Map:
+    adc := {
+      "enabled": false,
+      "channels": null,
+      "supply": null,
+      "supplyVolts": null,
+      "senseResistor": tps274c65.DEFAULT-SENSE-RESISTOR-OHMS,
+    }
+    mutex_.do:
+      if driver_.adc-enabled:
+        adc["enabled"] = true
+        channels := []
+        tps274c65.CHANNEL-COUNT.repeat:
+          channel := it + 1
+          current := driver_.read-current-raw channel
+          temperature := driver_.read-temperature-raw channel
+          voltage := driver_.read-output-voltage-raw channel
+          channels.add {
+            "channel": channel,
+            "current": current,
+            "milliAmps": tps274c65.adc-milli-amps current,
+            "temperature": temperature,
+            "celsius": tps274c65.adc-celsius temperature,
+            "voltage": voltage,
+            "volts": tps274c65.adc-volts voltage
+                --full-scale=tps274c65.ADC-FULL-SCALE-8-BIT,
+          }
+        adc["channels"] = channels
+        supply := driver_.read-supply-voltage-raw
+        adc["supply"] = supply
+        adc["supplyVolts"] = tps274c65.adc-volts supply
+            --full-scale=tps274c65.ADC-FULL-SCALE-10-BIT
+    return with-adc_ adc
+
+  /**
+  Starts or stops the ADC, and answers with a fresh set of readings.
+
+  Goes through the driver, so the fault latching and auto retry settings that
+    share `DEV_CONFIG5` survive the write.
+  */
+  set-adc_ enabled/bool -> Map:
+    mutex_.do: driver_.set-adc --enabled=enabled
+    return read-adc_
+
+  /** Returns $state_ with the ADC readings in $adc attached. */
+  with-adc_ adc/Map -> Map:
+    result := state_
+    result["adc"] = adc
     return result
 
   /** Returns $state_ with the decoded current-limit configuration attached. */

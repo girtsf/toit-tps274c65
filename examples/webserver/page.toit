@@ -43,6 +43,33 @@ when you ask. Everything else here refreshes once a second.</p>
 </section>
 
 <section>
+<details id="adc" ontoggle="adcToggled()">
+<summary><h2>ADC</h2></summary>
+
+<div class="row">
+<label><input type="checkbox" id="adc-en" onchange="setAdc(this.checked)"> run
+the ADC</label>
+<span class="mono" id="adc-vs">--</span>
+</div>
+
+<table>
+<thead>
+<tr><th></th><th>current</th><th>temperature</th><th>output</th></tr>
+</thead>
+<tbody id="adc-rows"></tbody>
+</table>
+
+<p class="note">The current assumes the 1 kOhm RSNS the datasheet recommends,
+which puts full scale at 3.25 A; a board with another one reads proportionally
+wrong. Temperature is the junction of each FET, and the only reading that means
+anything while a channel is off -- current and output voltage both sit near
+zero there. A round of the ADC takes 1.7 ms, so a reading is at most that
+stale, and it costs 38 frames to collect the lot, which is why this box is
+polled only while it is open.</p>
+</details>
+</section>
+
+<section>
 <h2>Registers</h2>
 <div class="row">
 <select id="reg"></select>
@@ -55,7 +82,7 @@ when you ask. Everything else here refreshes once a second.</p>
 </section>
 
 <section>
-<details ontoggle="if (this.open) readLimits()">
+<details id="limits" ontoggle="if (this.open) readLimits()">
 <summary><h2>Current limits</h2></summary>
 
 <div class="row">

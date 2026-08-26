@@ -24,6 +24,14 @@ ul { list-style: none; padding: 0; margin: .6rem 0 0; }
 li { padding: .3rem .5rem; border-radius: 4px; margin-bottom: .25rem; }
 li.bad { background: #fff1f0; border-left: 3px solid #cf222e; }
 li.ok { background: #f2fbf4; border-left: 3px solid #1a7f37; color: #555; }
+table { border-collapse: collapse; margin-top: .8rem; font-variant-numeric: tabular-nums; }
+th, td { text-align: right; padding: .3rem .8rem .3rem 0; border-bottom: 1px solid #eee; }
+th { color: #666; font-size: .85rem; font-weight: normal; text-transform: uppercase;
+     letter-spacing: .06em; }
+td { font-family: ui-monospace, Menlo, monospace; }
+td.off { color: #999; }
+td:first-child, th:first-child { text-align: left; }
+.raw { color: #999; font-size: .8rem; margin-left: .4rem; }
 summary { cursor: pointer; }
 summary h2 { display: inline; margin: 0; }
 .field { color: #666; font-size: .85rem; min-width: 9.5rem; }

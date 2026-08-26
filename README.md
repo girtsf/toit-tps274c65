@@ -12,7 +12,8 @@ pulse. It also assumes the **AS** part where the variants differ
 See `examples/*.toit`.
 
 You can `jag run examples/webserver/main.toit` to start a web UI that shows the
-switch state and decoded faults and lets you poke at registers.
+switch state, decoded faults and the ADC readings, and lets you poke at
+registers.
 
 ![The web UI](examples/webserver/screenshot.png)
 

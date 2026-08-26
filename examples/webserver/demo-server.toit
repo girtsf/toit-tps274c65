@@ -30,6 +30,27 @@ main:
   // them has something real to show.
   device.contents[tps274c65.REG-DEV-CONFIG1] = 0x0a
   device.contents[tps274c65.REG-DEV-CONFIG2] = 0x0a
+  // The ADC, running, with a set of conversions to match: channels 1 and 3
+  // carrying current into a supply that has sagged to 10.5 V, channels 2 and
+  // 4 off and so reading nothing but their junction temperature. The reserved
+  // bits of the registers that have them read back as ones, the way they do
+  // on a real device.
+  device.reserved-ones[tps274c65.REG-DEV-CONFIG5] = 0xc0
+  device.contents[tps274c65.REG-DEV-CONFIG5] = tps274c65.CONFIG5-ADC-EN
+  [
+    tps274c65.REG-ADC-RESULT-CH1-I-LSB, tps274c65.REG-ADC-RESULT-CH2-I-LSB,
+    tps274c65.REG-ADC-RESULT-CH3-I-LSB, tps274c65.REG-ADC-RESULT-CH4-I-LSB,
+    tps274c65.REG-ADC-RESULT-VS-LSB,
+  ].do: device.reserved-ones[it] = 0xfc
+  set-adc-conversion_ device tps274c65.REG-ADC-RESULT-VS 358  // 10.5 V.
+  set-adc-conversion_ device tps274c65.REG-ADC-RESULT-CH1-I 151  // 479 mA.
+  set-adc-conversion_ device tps274c65.REG-ADC-RESULT-CH3-I 378  // 1200 mA.
+  device.contents[tps274c65.REG-ADC-RESULT-CH1-T] = 178  // 59 C.
+  device.contents[tps274c65.REG-ADC-RESULT-CH2-T] = 186  // 45 C.
+  device.contents[tps274c65.REG-ADC-RESULT-CH3-T] = 164  // 84 C.
+  device.contents[tps274c65.REG-ADC-RESULT-CH4-T] = 198  // 24 C.
+  device.contents[tps274c65.REG-ADC-RESULT-CH1-V] = 88  // 10.4 V.
+  device.contents[tps274c65.REG-ADC-RESULT-CH3-V] = 87  // 10.2 V.
   device.read-to-clear.add tps274c65.REG-FAULT-GLOBAL-TYPE
   device.read-to-clear.add tps274c65.REG-ILIMIT-CH-STAT
   driver := tps274c65.Driver device
@@ -39,3 +60,13 @@ main:
     (Ui driver).listen network PORT
   finally:
     network.close
+
+/**
+Puts the 10-bit conversion $raw into $register and the LSB register above it.
+
+The two ten-bit results, the currents and the supply voltage, are split over
+  a register pair whose second half holds the bottom two bits.
+*/
+set-adc-conversion_ device/FakeDevice register/int raw/int -> none:
+  device.contents[register] = raw >> 2
+  device.contents[register + 1] = raw & 0x03

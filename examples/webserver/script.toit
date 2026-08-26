@@ -18,6 +18,8 @@ var limits = null;
 
 function hex2(value) { return "0x" + pad2(value.toString(16)); }
 
+function hex3(value) { return "0x" + ("00" + value.toString(16)).slice(-3); }
+
 function bits4(value) {
   var out = "";
   for (var i = 3; i >= 0; i--) out += (value >> i) & 1;
@@ -89,6 +91,7 @@ function update(data, source) {
             bitNames(data.globalFaultBits));
   }
   if (data.limits) applyLimits(data.limits);
+  if (data.adc) applyAdc(data.adc);
   var access = data.register;
   if (access) {
     logLine((access.written ? "write " : "read  ") + hex2(access.address) + " " +
@@ -143,6 +146,59 @@ function renderBits(id, bits, emptyText) {
     }
     list.appendChild(item);
   });
+}
+
+// The ADC box. Its results are plain `R`, so unlike the fault registers they
+// can be polled -- but a full set costs 38 frames, so the poll only asks for
+// them while the box is open. Nothing is read at all while the ADC is off:
+// every result register would read zero, and zero is a real temperature.
+function adcOpen() { return document.getElementById("adc").open; }
+
+function adcToggled() { if (adcOpen()) act(api("/api/adc")); }
+
+function setAdc(enabled) { act(api("/api/adc", {enabled: enabled})); }
+
+function applyAdc(data) {
+  document.getElementById("adc-en").checked = data.enabled;
+  // The message beside the checkbox is only there to explain an empty table.
+  document.getElementById("adc-vs").textContent =
+      data.enabled ? "" : "off, so nothing is converted";
+  var rows = document.getElementById("adc-rows");
+  rows.innerHTML = "";
+  if (!data.enabled) return;
+  data.channels.forEach(function (entry) {
+    // Current and output voltage only mean something while the channel is on.
+    var off = (state.switchState & (1 << (entry.channel - 1))) === 0;
+    var row = document.createElement("tr");
+    row.appendChild(cell("CH" + entry.channel));
+    row.appendChild(cell(entry.milliAmps.toFixed(0) + " mA", hex3(entry.current), off));
+    row.appendChild(cell(entry.celsius.toFixed(1) + " C", hex2(entry.temperature), false));
+    row.appendChild(cell(entry.volts.toFixed(1) + " V", hex2(entry.voltage), off));
+    rows.appendChild(row);
+  });
+  // The supply is not a channel, but it is a voltage, so it goes in the
+  // voltage column under the four outputs it feeds.
+  var supply = document.createElement("tr");
+  supply.appendChild(cell("VS"));
+  supply.appendChild(cell(""));
+  supply.appendChild(cell(""));
+  supply.appendChild(cell(data.supplyVolts.toFixed(2) + " V", hex3(data.supply)));
+  rows.appendChild(supply);
+}
+
+// A table cell holding a converted value, the conversion it came from beside
+// it, and greyed out when the reading does not apply.
+function cell(text, raw, dim) {
+  var td = document.createElement("td");
+  td.textContent = text;
+  if (raw !== undefined) {
+    var span = document.createElement("span");
+    span.className = "raw";
+    span.textContent = raw;
+    td.appendChild(span);
+  }
+  if (dim) td.className = "off";
+  return td;
 }
 
 // The current-limit box. Its selects are built once from the tables the
@@ -347,7 +403,9 @@ function readGlobal() { act(api("/api/global-faults", {})); }
 function poll() {
   if (polling || actions > 0) return;
   polling = true;
-  api("/api/state").then(function (data) {
+  // While the ADC box is open the poll collects the readings too, so the two
+  // never have a request in flight at the same time.
+  api(adcOpen() ? "/api/adc" : "/api/state").then(function (data) {
     polling = false;
     // An action started while this was in flight, so its answer is the newer
     // one. Drop this.

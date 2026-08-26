@@ -2,7 +2,8 @@
 Serves a web UI for driving a TPS274C65.
 
 The page shows the switch state and the fault byte, decoded, and lets you flip
-  channels and read or write any documented register. It is split up as:
+  channels, run the ADC and read what it converted, and read or write any
+  documented register. It is split up as:
 
 - `main.toit`: the wiring, here.
 - `api.toit`: the JSON API the page talks to.
