@@ -278,6 +278,35 @@ class Driver:
         --clear=(CONFIG3-INRUSH-LIMIT-MASK | (timeout ? 0 : CONFIG3-ILIM-CONFIG))
 
   /**
+  Enables or disables reverse current blocking on all four channels.
+
+  Reverse current blocking needs an external NMOS FET per channel, driven
+    from the `RCBx` pins. With $enabled false, $CONFIG3-RCB-DIS is set and
+    those pins stop driving, which is what a board with no external FETs
+    wants. Leave the pins floating there. Out of reset blocking is on.
+
+  Leaves $REG-DEV-CONFIG6, which turns the blocking FETs off channel by
+    channel, alone. That register only has an effect while blocking is
+    enabled here.
+
+  Does nothing useful on the BS part, which has no reverse current blocking
+    at all. Costs three frames, being a read-modify-write of
+    $REG-DEV-CONFIG3.
+  */
+  set-reverse-blocking --enabled/bool -> none:
+    update-register_ REG-DEV-CONFIG3
+        --set=(enabled ? 0 : CONFIG3-RCB-DIS)
+        --clear=(enabled ? CONFIG3-RCB-DIS : 0)
+
+  /**
+  Whether reverse current blocking is enabled.
+
+  Costs two frames. See $set-reverse-blocking.
+  */
+  reverse-blocking-enabled -> bool:
+    return ((read-register REG-DEV-CONFIG3) & CONFIG3-RCB-DIS) == 0
+
+  /**
   Runs or stops the ADC.
 
   Nothing is converted until this is on: out of reset $CONFIG5-ADC-EN is

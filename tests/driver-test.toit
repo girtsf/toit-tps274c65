@@ -15,6 +15,7 @@ main:
   test-set-current-limit
   test-set-current-limit-split
   test-set-inrush-mode
+  test-set-reverse-blocking
   test-read-current-raw
   test-read-8-bit-results
   test-read-supply-voltage-raw
@@ -278,6 +279,34 @@ test-set-inrush-mode:
       device.frames[9]
 
   expect-throw "INVALID_ARGUMENT": driver.set-inrush-mode --limit=4
+
+/**
+Disabling reverse current blocking sets RCB_DIS, keeping the rest of DEV_CONFIG3.
+
+The current limit and inrush settings share the register, and a board with
+  no external RCB FETs still has to be able to configure them.
+*/
+test-set-reverse-blocking:
+  device := FakeDevice
+  driver := Driver device
+
+  // Something in the register that has nothing to do with blocking.
+  driver.write-register REG-DEV-CONFIG3 CONFIG3-ILIM-SET
+
+  expect driver.reverse-blocking-enabled
+  driver.set-reverse-blocking --no-enabled
+  expect-equals CONFIG3-ILIM-SET | CONFIG3-RCB-DIS device.contents[REG-DEV-CONFIG3]
+  expect-not driver.reverse-blocking-enabled
+
+  // A later current limit call reads the register back, so RCB_DIS survives it.
+  driver.set-current-limit-split
+      --channels-1-2=IlimCode.MA-1250
+      --channels-3-4=IlimCode.MA-1250
+  expect-not driver.reverse-blocking-enabled
+
+  driver.set-reverse-blocking --enabled
+  expect-equals CONFIG3-ILIM-SET device.contents[REG-DEV-CONFIG3]
+  expect driver.reverse-blocking-enabled
 
 /**
 A current conversion is assembled from two registers, the LSBs masked down.
