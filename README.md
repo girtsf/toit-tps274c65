@@ -9,6 +9,18 @@ high). It assumes **one device per chip select**, so one frame per chip-select
 pulse. It also assumes the **AS** part where the variants differ
 (current-limits table).
 
+## Installation
+
+```sh
+toit pkg install github.com/girtsf/toit-tps274c65
+```
+
+Then:
+
+```
+import tps274c65
+```
+
 See `examples/*.toit`.
 
 You can `jag run examples/webserver/main.toit` to start a web UI that shows the
