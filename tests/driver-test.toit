@@ -16,6 +16,7 @@ main:
   test-set-current-limit-split
   test-set-inrush-mode
   test-set-reverse-blocking
+  test-power-config-is-locked-while-a-channel-is-on
   test-read-current-raw
   test-read-8-bit-results
   test-read-supply-voltage-raw
@@ -314,6 +315,55 @@ A current conversion is assembled from two registers, the LSBs masked down.
 ADC_RESULT_CHx_I_LSB has six reserved bits above the two that matter, and
   reserved bits read back as ones.
 */
+/**
+The power-path registers refuse to be written while a channel is on.
+
+The device drops those writes silently -- no SPI_ERR, nothing in the fault
+  byte -- so a caller that is not told goes on believing it changed a current
+  limit it did not. Confirmed on hardware with
+  `examples/probe-config-writes.toit`: DEV_CONFIG1, DEV_CONFIG2, DEV_CONFIG3
+  and DEV_CONFIG6 all read back unchanged after a write with one output up,
+  and everything else in the map takes its write as usual.
+*/
+test-power-config-is-locked-while-a-channel-is-on:
+  device := FakeDevice
+  driver := Driver device
+
+  // With everything off they are ordinary registers.
+  POWER-CONFIG-REGISTERS.do: | register/int |
+    driver.write-register register 0x05
+    expect-equals 0x05 device.contents[register]
+
+  driver.set-channel 1 --on=true
+  POWER-CONFIG-REGISTERS.do: | register/int |
+    expect-throw POWER-CONFIG-LOCKED-ERROR: driver.write-register register 0x0a
+    // And nothing went out on the bus: the throw is ahead of the frame.
+    expect-equals 0x05 device.contents[register]
+
+  // One channel on locks all four, including the two that govern the other
+  // pair. That is the device's rule, not a per-channel one.
+  expect-throw POWER-CONFIG-LOCKED-ERROR:
+      driver.set-current-limit IlimCode.MA-2200
+  expect-throw POWER-CONFIG-LOCKED-ERROR:
+      driver.set-current-limit-split --channels-1-2=IlimCode.MA-250 --channels-3-4=IlimCode.MA-250
+  expect-throw POWER-CONFIG-LOCKED-ERROR:
+      driver.set-inrush-mode --limit=INRUSH-LIMIT-2X
+  expect-throw POWER-CONFIG-LOCKED-ERROR:
+      driver.set-reverse-blocking --enabled=false
+
+  // Everything outside that set still writes, DEV_CONFIG4 and DEV_CONFIG5
+  // included despite the names.
+  [REG-DEV-CONFIG4, REG-DEV-CONFIG5, REG-FAULT-MASK, REG-ADC-CONFIG1,
+   REG-LED1-4-CTL, REG-EN-WB-ON].do: | register/int |
+    driver.write-register register 0x03
+    expect-equals 0x03 device.contents[register]
+
+  // And they go back to being writable once the outputs are down.
+  driver.set-channel 1 --on=false
+  POWER-CONFIG-REGISTERS.do: | register/int |
+    driver.write-register register 0x0a
+    expect-equals 0x0a device.contents[register]
+
 test-read-current-raw:
   device := FakeDevice
   device.reserved-ones[REG-ADC-RESULT-CH2-I-LSB] = 0xfc

@@ -201,8 +201,13 @@ class Driver:
   A write fills the read pipeline the same way a read does: the frame after
     this one carries the new contents of $register. $read-register does not
     rely on that, and always sends its own two frames.
+
+  Throws $POWER-CONFIG-LOCKED-ERROR if a write to $POWER-CONFIG-REGISTERS is 
+    attempted while any channel is on.
   */
   write-register register/int value/int -> none:
+    if switch-state_ != 0 and POWER-CONFIG-REGISTERS.contains register:
+      throw POWER-CONFIG-LOCKED-ERROR
     transfer_ (build-write-frame register value)
     // Mask the cached copies down to the bits the registers really have. The
     // switch state goes back out in the data byte of every read frame, so a
@@ -226,6 +231,8 @@ class Driver:
     governs all four channels. Costs four frames: one for the write, three
     for the read-modify-write of $REG-DEV-CONFIG3. See
     $set-current-limit-split to give channels 3 and 4 a limit of their own.
+
+  Throws $POWER-CONFIG-LOCKED-ERROR if any channel is on.
   */
   set-current-limit code/IlimCode --inrush/InrushWindow=InrushWindow.MS-0 -> none:
     write-register REG-DEV-CONFIG1 (build-ilim-config code --inrush=inrush)
@@ -242,6 +249,8 @@ class Driver:
   Writes both registers before setting $CONFIG3-ILIM-SET, so channels 3 and
     4 never run against a stale DEV_CONFIG2. Costs five frames: two for the
     writes, three for the read-modify-write of $REG-DEV-CONFIG3.
+
+  Throws $POWER-CONFIG-LOCKED-ERROR if any channel is on.
   */
   set-current-limit-split -> none
       --channels-1-2/IlimCode
@@ -270,6 +279,8 @@ class Driver:
   Applies to every channel: $REG-DEV-CONFIG3 has no per-channel fields. Only
     the duration is per channel pair. Costs three frames, being a
     read-modify-write of $REG-DEV-CONFIG3.
+
+  Throws $POWER-CONFIG-LOCKED-ERROR if any channel is on.
   */
   set-inrush-mode --limit/int=INRUSH-LIMIT-1X --timeout/bool=false -> none:
     if not 0 <= limit <= CONFIG3-INRUSH-LIMIT-MASK: throw "INVALID_ARGUMENT"
@@ -292,6 +303,8 @@ class Driver:
   Does nothing useful on the BS part, which has no reverse current blocking
     at all. Costs three frames, being a read-modify-write of
     $REG-DEV-CONFIG3.
+
+  Throws $POWER-CONFIG-LOCKED-ERROR if any channel is on.
   */
   set-reverse-blocking --enabled/bool -> none:
     update-register_ REG-DEV-CONFIG3

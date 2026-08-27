@@ -85,6 +85,27 @@ REG-DEV-CONFIG4 ::= 0x24
 REG-DEV-CONFIG5 ::= 0x25
 /** Per-channel reverse-current-blocking gate control. */
 REG-DEV-CONFIG6 ::= 0x26
+
+/**
+The registers that stop accepting writes while any channel is on.
+
+Everything that configures the power path: the current limits and their
+  inrush behaviour ($REG-DEV-CONFIG1, $REG-DEV-CONFIG2), the sense range and
+  the reverse-blocking and paralleling switches ($REG-DEV-CONFIG3), and the
+  per-channel blocking gates ($REG-DEV-CONFIG6). A write to one of these
+  while an output is up is dropped by the device, silently -- no `SPI_ERR`
+  and nothing in the fault byte. `Driver.write-register` throws
+  $POWER-CONFIG-LOCKED-ERROR rather than let one go out.
+*/
+POWER-CONFIG-REGISTERS/List ::= [
+  REG-DEV-CONFIG1, REG-DEV-CONFIG2, REG-DEV-CONFIG3, REG-DEV-CONFIG6,
+]
+
+/**
+Thrown on a write to a $POWER-CONFIG-REGISTERS entry while a channel is on.
+*/
+POWER-CONFIG-LOCKED-ERROR ::= "POWER_CONFIG_LOCKED"
+
 /** Per-fault-type masking of the FLT pin. */
 REG-FAULT-MASK ::= 0x27
 /** Enables off-state wire-break diagnostics, per channel. */

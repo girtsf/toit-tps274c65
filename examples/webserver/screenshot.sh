@@ -48,8 +48,8 @@ until curl -sf -o /dev/null "$URL"; do
   sleep 1
 done
 
-# Turn two channels on, then read a few registers, so the page has both a
-# switch state and a readout to show. Everything called here is a function the
+# Read and write a few registers, then turn two channels on, so the page has
+# both a switch state and a readout to show. Everything called here is a function the
 # page itself defines, so this drives the real UI rather than faking its
 # output. The registers read here are plain `RW`, on purpose: reading
 # ILIMIT_CH_STAT would clear the ILIMIT fault the picture is meant to show.
@@ -59,13 +59,16 @@ uvx shot-scraper shot "$URL" \
   --javascript "$(cat <<'JS'
 (async () => {
   const settle = () => new Promise(done => setTimeout(done, 400));
-  setSwitch(0b0101);                             await settle();
-  readGlobal();                                  await settle();
+  // The register writes go first: DEV_CONFIG1 is one of the four the device
+  // stops accepting once an output is up, and the driver throws rather than
+  // send one that would be dropped.
   selectRegister(0x24); doRead();                await settle();
   selectRegister(0x25); doRead();                await settle();
   selectRegister(0x21);
   document.getElementById("val").value = "0a";
   doWrite();                                     await settle();
+  setSwitch(0b0101);                             await settle();
+  readGlobal();                                  await settle();
   // Open the two collapsible boxes, each of which reads what it shows.
   // Collapsed is their default, but a collapsed box makes for a picture of
   // nothing.

@@ -117,7 +117,17 @@ polled only while it is open.</p>
 
 <div class="row" style="margin-top:.8rem">
 <button id="limits-write" onclick="writeLimits()" disabled>write</button>
+<span class="note" id="limits-locked" style="margin:0"></span>
 </div>
+
+<p class="note">Every output has to be off to write any of this. DEV_CONFIG1,
+DEV_CONFIG2, DEV_CONFIG3 and DEV_CONFIG6 -- the current limits, the inrush
+behaviour, the sense range and the reverse-blocking gates -- stop accepting
+writes while any channel is on, and the device drops them without saying so:
+no SPI_ERR, nothing in the fault byte. One channel up locks all four, even the
+ones that govern the other pair, so switching off just the channel being
+changed is not enough. The driver throws rather than let such a write go out.
+The datasheet says this of the two PARALLEL bits only.</p>
 
 <p class="note">Split gives channels 3 and 4 a limit of their own, in
 DEV_CONFIG2; without it DEV_CONFIG1 governs all four and DEV_CONFIG2 is left

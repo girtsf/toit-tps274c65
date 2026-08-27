@@ -110,6 +110,9 @@ function render() {
     button.textContent = "CH" + channel + (on ? " on" : " off");
     button.className = on ? "chan on" : "chan";
   }
+  // The limits box is gated on the switch state, so it has to be revisited
+  // whenever that moves and not only when the form does.
+  limitsChanged();
   document.getElementById("fault-hex").textContent = hex2(state.faults);
   renderBits("fault-list", state.faultBits, "no faults");
   document.getElementById("global-hex").textContent =
@@ -265,7 +268,12 @@ function applyLimits(data) {
 }
 
 // Greys out what does not apply, and offers the write button only once the
-// form says something other than what was read back.
+// form says something other than what was read back -- and only while every
+// output is off. The four registers behind this box stop accepting writes
+// while any channel is on and the device drops them in silence, so the button
+// has to go away rather than send one. The selects stay live: staging a
+// change, switching the outputs off and then writing is a reasonable way
+// round.
 function limitsChanged() {
   var form = limitsForm();
   document.getElementById("ilim34").disabled = !form.split;
@@ -277,7 +285,10 @@ function limitsChanged() {
     if (form.timeout && key === "inrushLimit") return false;
     return form[key] !== limits[key];
   });
-  document.getElementById("limits-write").disabled = !dirty;
+  var live = state !== null && state.switchState !== 0;
+  document.getElementById("limits-write").disabled = !dirty || live;
+  document.getElementById("limits-locked").textContent = live ?
+      "locked: switch every output off first" : "";
 }
 
 // Opening the box reads, and that can happen before the pickers have been
