@@ -320,10 +320,9 @@ The power-path registers refuse to be written while a channel is on.
 
 The device drops those writes silently -- no SPI_ERR, nothing in the fault
   byte -- so a caller that is not told goes on believing it changed a current
-  limit it did not. Confirmed on hardware with
-  `examples/probe-config-writes.toit`: DEV_CONFIG1, DEV_CONFIG2, DEV_CONFIG3
-  and DEV_CONFIG6 all read back unchanged after a write with one output up,
-  and everything else in the map takes its write as usual.
+  limit it did not. Confirmed on hardware: DEV_CONFIG1, DEV_CONFIG2,
+  DEV_CONFIG3 and DEV_CONFIG6 all read back unchanged after a write with one
+  output up, and everything else in the map takes its write as usual.
 */
 test-power-config-is-locked-while-a-channel-is-on:
   device := FakeDevice

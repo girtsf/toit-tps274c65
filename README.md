@@ -54,6 +54,10 @@ Some gotchas to watch out for:
 * LEDs can only be turned on/off and cannot be configured to convey any device
   state.
 * TPS274C65EVM has its SDI and SCLK test point labels swapped.
+* Undocumented: `DEV_CONFIG1`, `DEV_CONFIG2`, `DEV_CONFIG3` and `DEV_CONFIG6`
+  silently ignore writes while any channel is on.
+* `FAULT_GLOBAL_TYPE` (02h) bit 7 reads back as one though the datasheet calls
+  it reserved with reset 0, so a clean device reads 80h rather than 00h.
 
 ## AI Disclosure
 
