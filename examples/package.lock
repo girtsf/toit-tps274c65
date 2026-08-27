@@ -1,4 +1,4 @@
-sdk: ^2.0.0-alpha.195
+sdk: ^2.0.0-alpha.196
 prefixes:
   tps274c65: toit-tps274c65
 packages:
