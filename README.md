@@ -56,6 +56,17 @@ Some gotchas to watch out for:
 * TPS274C65EVM has its SDI and SCLK test point labels swapped.
 * Undocumented: `DEV_CONFIG1`, `DEV_CONFIG2`, `DEV_CONFIG3` and `DEV_CONFIG6`
   silently ignore writes while any channel is on.
+* `DEV_CONFIG5` (25h) bit 1 `SW_FS_CFG` is documented both ways: the prose
+  above table 8-50 says setting it holds the outputs, the field description
+  below says setting it takes them from `FS_SW_STATE`. The field description
+  is the right one, confirmed on the bench: with `FS_SW_STATE` asking for a
+  channel the outputs did not have, tripping the watchdog switched that
+  channel on with the bit set and left it alone with the bit clear.
+* Undocumented: the SPI watchdog is fed by any frame carrying a switch state,
+  which in 16-bit daisy chain means every *read* frame as well as a write to
+  `SW_STATE`. A write to any other register does not feed it. Bench-confirmed,
+  so a polling loop keeps the watchdog happy on its own and a
+  configuration-only loop does not.
 * `FAULT_GLOBAL_TYPE` (02h) bit 7 reads back as one though the datasheet calls
   it reserved with reset 0, so a clean device reads 80h rather than 00h.
   `Driver.read-global-faults` masks it off; `read-register` does not.

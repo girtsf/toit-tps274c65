@@ -322,6 +322,86 @@ class Driver:
     return ((read-register REG-DEV-CONFIG3) & CONFIG3-RCB-DIS) == 0
 
   /**
+  Runs or stops the SPI watchdog.
+
+  With $enabled true the device wants a write to $REG-SW-STATE within every
+    $timeout, and raises $GLOBAL-WD-ERR when one does not arrive. It also
+    puts the outputs wherever $set-fail-safe-state last left them, which
+    this method does not touch; out of reset they hold.
+
+  $feed-watchdog is that write, and so is every other frame carrying a
+    switch state: $switch-state=, $set-channel, $close, and reads as well,
+    a read frame carrying one too. Only a write to some register other than
+    $REG-SW-STATE leaves the watchdog hungry. See $feed-watchdog.
+
+  $timeout has no default on purpose. The reset code is
+    $WatchdogTimeout.US-400, and enabling the watchdog on it by accident
+    gives four hundred microseconds to answer in.
+
+  Costs three frames, being a read-modify-write of $REG-DEV-CONFIG4. That
+    register also holds the wire-break pull-up current and on-state
+    threshold, which are read back and written out again untouched.
+
+  The timeout starts running as this frame lands, so feed the watchdog
+    within one $timeout of enabling it.
+  */
+  set-watchdog --enabled/bool --timeout/WatchdogTimeout -> none:
+    update-register_ REG-DEV-CONFIG4
+        --set=((enabled ? CONFIG4-WD-EN : 0) | (timeout.value << CONFIG4-WD-TO-SHIFT))
+        --clear=(CONFIG4-WD-TO-MASK | (enabled ? 0 : CONFIG4-WD-EN))
+
+  /** Whether the SPI watchdog is running. Costs two frames. See $set-watchdog. */
+  watchdog-enabled -> bool:
+    return ((read-register REG-DEV-CONFIG4) & CONFIG4-WD-EN) != 0
+
+  /**
+  The timeout the SPI watchdog is set to.
+
+  Says nothing about whether the watchdog is running: `WD_TO` keeps its code
+    either way. See $watchdog-enabled. Costs two frames.
+  */
+  watchdog-timeout -> WatchdogTimeout:
+    value := (read-register REG-DEV-CONFIG4) & CONFIG4-WD-TO-MASK
+    return WatchdogTimeout.ALL[value >> CONFIG4-WD-TO-SHIFT]
+
+  /**
+  Feeds the SPI watchdog.
+  */
+  feed-watchdog -> none:
+    write-register REG-SW-STATE switch-state_
+
+  /**
+  Sets where the outputs go when the watchdog trips.
+
+  $state is a switch state, laid out as $switch-state: bit 0 is channel 1,
+    and a set bit means that FET is driven on once the error hits. Null
+    holds instead, leaving every output where it was, which is how the
+    device comes out of reset.
+
+  Covers `SPI_ERR` as well as $GLOBAL-WD-ERR: the two share the mechanism.
+
+  Writes $REG-FS-SW-STATE before turning it on, so an error landing in
+    between never finds a stale state. See $CONFIG5-SW-FS-CFG for the
+    contradiction in the datasheet about which way that bit runs, and how it
+    was settled.
+  */
+  set-fail-safe-state state/int? -> none:
+    if state != null:
+      check-switch-state_ state
+      write-register REG-FS-SW-STATE state
+    update-register_ REG-DEV-CONFIG5
+        --set=(state != null ? CONFIG5-SW-FS-CFG : 0)
+        --clear=(state != null ? 0 : CONFIG5-SW-FS-CFG)
+        --mask=CONFIG5-WRITABLE-MASK
+
+  /**
+  The state the outputs go to when the watchdog trips, or null if they hold.
+  */
+  fail-safe-state -> int?:
+    if ((read-register REG-DEV-CONFIG5) & CONFIG5-SW-FS-CFG) == 0: return null
+    return (read-register REG-FS-SW-STATE) & 0x0f
+
+  /**
   Runs or stops the ADC.
 
   Nothing is converted until this is on: out of reset $CONFIG5-ADC-EN is

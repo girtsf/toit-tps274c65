@@ -17,6 +17,10 @@ main:
   test-set-current-limit-split
   test-set-inrush-mode
   test-set-reverse-blocking
+  test-set-watchdog
+  test-feed-watchdog
+  test-set-fail-safe-state
+  test-watchdog-timeouts
   test-power-config-is-locked-while-a-channel-is-on
   test-read-current-raw
   test-read-8-bit-results
@@ -495,3 +499,108 @@ adc-full-scale-fraction_ volts/float full-scale/int -> int:
 expect-near_ expected/float actual/float --epsilon/float=0.05 -> none:
   expect (expected - actual).abs <= epsilon
       --message="expected $expected, got $actual"
+
+/**
+Enabling the watchdog sets the timeout with it, leaving the wire-break
+  fields of the register alone.
+*/
+test-set-watchdog:
+  device := FakeDevice
+  driver := Driver device
+
+  // The reset contents: watchdog off, WB_ON_THD at its reset code of 2.
+  driver.write-register REG-DEV-CONFIG4 0x02
+
+  expect-not driver.watchdog-enabled
+  expect-equals WatchdogTimeout.US-400 driver.watchdog-timeout
+
+  driver.set-watchdog --enabled --timeout=WatchdogTimeout.MS-800
+  expect-equals 0x02 | CONFIG4-WD-EN | 0x40 device.contents[REG-DEV-CONFIG4]
+  expect driver.watchdog-enabled
+  expect-equals WatchdogTimeout.MS-800 driver.watchdog-timeout
+
+  // A shorter timeout replaces the old code rather than ORing into it.
+  driver.set-watchdog --enabled --timeout=WatchdogTimeout.MS-400
+  expect-equals 0x02 | CONFIG4-WD-EN | 0x20 device.contents[REG-DEV-CONFIG4]
+  expect-equals WatchdogTimeout.MS-400 driver.watchdog-timeout
+
+  // Disabling keeps the timeout code and the wire-break bits.
+  driver.set-watchdog --no-enabled --timeout=WatchdogTimeout.MS-400
+  expect-equals 0x02 | 0x20 device.contents[REG-DEV-CONFIG4]
+  expect-not driver.watchdog-enabled
+  expect-equals WatchdogTimeout.MS-400 driver.watchdog-timeout
+
+/** Feeding rewrites the switch state without moving an output. */
+test-feed-watchdog:
+  device := FakeDevice
+  driver := Driver device
+
+  driver.set-channel 2 --on
+  frames := device.frames.size
+
+  driver.feed-watchdog
+  expect-equals frames + 1 device.frames.size
+  expect-equals #[0x80 | REG-SW-STATE, 0b0010] device.frames[frames]
+  expect-equals 0b0010 driver.switch-state
+  expect-equals 0b0010 device.contents[REG-SW-STATE]
+
+  // With every output down it still goes out on the bus.
+  driver.switch-state = 0
+  frames = device.frames.size
+  driver.feed-watchdog
+  expect-equals frames + 1 device.frames.size
+  expect-equals 0 driver.switch-state
+
+/** The fail-safe state is written before the bit that puts it to use. */
+test-set-fail-safe-state:
+  device := FakeDevice
+  device.reserved-ones[REG-DEV-CONFIG5] = 0xc0
+  driver := Driver device
+
+  // Something in DEV_CONFIG5 that has nothing to do with the fail-safe state.
+  driver.write-register REG-DEV-CONFIG5 CONFIG5-ADC-EN
+
+  expect-null driver.fail-safe-state
+
+  frames := device.frames.size
+  driver.set-fail-safe-state 0b0101
+  expect-equals #[0x80 | REG-FS-SW-STATE, 0b0101] device.frames[frames]
+  expect-equals 0b0101 device.contents[REG-FS-SW-STATE]
+  expect-equals CONFIG5-ADC-EN | CONFIG5-SW-FS-CFG device.contents[REG-DEV-CONFIG5]
+  expect-equals 0b0101 driver.fail-safe-state
+
+  // All four outputs down on a watchdog error is a state like any other,
+  // and is not the same as holding.
+  driver.set-fail-safe-state 0
+  expect-equals 0 device.contents[REG-FS-SW-STATE]
+  expect-equals 0 driver.fail-safe-state
+
+  // Null holds, and leaves FS_SW_STATE alone.
+  driver.write-register REG-FS-SW-STATE 0b1010
+  driver.set-fail-safe-state null
+  expect-equals 0b1010 device.contents[REG-FS-SW-STATE]
+  expect-equals CONFIG5-ADC-EN device.contents[REG-DEV-CONFIG5]
+  expect-null driver.fail-safe-state
+
+  expect-throw "INVALID_ARGUMENT": driver.set-fail-safe-state 0b1_0000
+
+/** The watchdog timeouts are the four the `WD_TO` field can hold. */
+test-watchdog-timeouts:
+  expect-equals 4 WatchdogTimeout.ALL.size
+  WatchdogTimeout.ALL.size.repeat: | index/int |
+    expect-equals index WatchdogTimeout.ALL[index].value
+
+  expect-equals (Duration --us=400) WatchdogTimeout.US-400.duration
+  expect-equals (Duration --ms=1200) WatchdogTimeout.MS-1200.duration
+
+  // Rounds up to the next code the device has, and takes an exact one as is.
+  expect-equals WatchdogTimeout.US-400
+      WatchdogTimeout.at-least (Duration --us=1)
+  expect-equals WatchdogTimeout.MS-400
+      WatchdogTimeout.at-least (Duration --us=401)
+  expect-equals WatchdogTimeout.MS-800
+      WatchdogTimeout.at-least (Duration --ms=800)
+  expect-equals WatchdogTimeout.MS-1200
+      WatchdogTimeout.at-least (Duration --ms=801)
+  expect-throw "INVALID_ARGUMENT":
+    WatchdogTimeout.at-least (Duration --ms=1201)

@@ -406,6 +406,79 @@ INRUSH-LIMIT-HALF ::= 2
 INRUSH-LIMIT-FIXED ::= 3
 
 
+// DEV_CONFIG4 ($REG-DEV-CONFIG4) fields. Only the watchdog ones are named
+// here; bits 4 to 0 hold the off-state wire-break pull-up current and the
+// on-state wire-break threshold.
+
+/**
+Runs the SPI watchdog.
+
+Clear out of reset. Once set, a write to $REG-SW-STATE has to land within
+  every $WatchdogTimeout or the device raises $GLOBAL-WD-ERR and puts the
+  outputs where $CONFIG5-SW-FS-CFG says. `Driver.feed-watchdog` is that
+  write.
+*/
+CONFIG4-WD-EN ::= 1 << 7
+/** Mask of `WD_TO`, the timeout code. See $WatchdogTimeout. */
+CONFIG4-WD-TO-MASK ::= 0x60
+/** How far up `WD_TO` sits. See $CONFIG4-WD-TO-MASK. */
+CONFIG4-WD-TO-SHIFT ::= 5
+
+/**
+A timeout the SPI watchdog can be set to.
+
+The instances are the four periods the `WD_TO` field can select, and there
+  are no others: the constructor is private, so `Driver.set-watchdog` cannot
+  be handed a plain integer or a duration the device has no code for.
+
+The four are not evenly spaced. $US-400 is a thousand times shorter than the
+  next one up, and it is the reset code; see there.
+*/
+class WatchdogTimeout:
+  /** The `WD_TO` code selecting this timeout. See $CONFIG4-WD-TO-MASK. */
+  value/int
+  /** How long the device waits for a $REG-SW-STATE write before it faults. */
+  duration/Duration
+
+  constructor.private_ .value .duration:
+
+  /**
+  Returns the shortest timeout lasting at least $duration.
+
+  Rounds up, so the device is never given less time than was asked for.
+    Throws if $duration is longer than $MS-1200.
+
+  Only needed for a timeout that is not known until runtime. One chosen
+    while writing the code is better named by its constant.
+  */
+  constructor.at-least duration/Duration:
+    ALL.do: | timeout/WatchdogTimeout |
+      if timeout.duration >= duration: return timeout
+    throw "INVALID_ARGUMENT"
+
+  /**
+  A timeout of 400 microseconds.
+
+  The reset code, and the odd one out: every other code is hundreds of
+    milliseconds. Holding it off means a frame every 400 us, which is a hard
+    deadline for a Toit task to keep -- at the 1 MHz the examples clock the
+    bus at, one 16-bit frame alone takes 16 us. Reach for $MS-400 or longer
+    unless the application really does talk to the device that hard.
+  */
+  static US-400 ::= WatchdogTimeout.private_ 0x0 (Duration --us=400)
+  /** A timeout of 400 milliseconds. */
+  static MS-400 ::= WatchdogTimeout.private_ 0x1 (Duration --ms=400)
+  /** A timeout of 800 milliseconds. */
+  static MS-800 ::= WatchdogTimeout.private_ 0x2 (Duration --ms=800)
+  /** A timeout of 1200 milliseconds. */
+  static MS-1200 ::= WatchdogTimeout.private_ 0x3 (Duration --ms=1200)
+
+  /** Every timeout, indexed by its $value. */
+  static ALL/List ::= [US-400, MS-400, MS-800, MS-1200]
+
+  stringify -> string: return duration.stringify
+
+
 // DEV_CONFIG5 ($REG-DEV-CONFIG5) bits. Only the ADC one is named here; the
 // rest of the register is about faults.
 
@@ -416,6 +489,22 @@ Clear out of reset, so every conversion result reads 0 until this is set.
   See $ADC-ROUND-ROBIN-TIME for how long the first ones take to appear.
 */
 CONFIG5-ADC-EN ::= 1 << 5
+/**
+Sends the outputs to $REG-FS-SW-STATE when the watchdog or SPI errors.
+
+Clear, the reset state, holds: every output stays where it was when the
+  error hit. Set, each output takes its bit from $REG-FS-SW-STATE. The same
+  bit governs both $GLOBAL-WD-ERR and $GLOBAL-SPI-ERR.
+
+SLVSFZ2C contradicts itself on the polarity. The prose above table 8-50 has
+  it that setting the bit holds the state, and the field description right
+  below has 0h holding and 1h taking $REG-FS-SW-STATE. The field description
+  is the one that holds, confirmed on the bench: with $REG-FS-SW-STATE
+  asking for a channel the outputs did not have, tripping the watchdog
+  switched that channel on with this bit set and left it alone with it
+  clear.
+*/
+CONFIG5-SW-FS-CFG ::= 1 << 1
 /**
 Takes the fault bits off the latched path and onto the live one.
 
