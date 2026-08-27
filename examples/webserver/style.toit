@@ -40,4 +40,18 @@ summary h2 { display: inline; margin: 0; }
 .sub.bad { color: #cf222e; }
 pre { background: #f6f6f6; border-radius: 4px; padding: .6rem; margin: .6rem 0 0;
       min-height: 1.5rem; overflow-x: auto; font-size: .85rem; }
+.chart { display: block; width: 100%; height: auto; margin-top: .8rem;
+         border: 1px solid #eee; border-radius: 4px; }
+.chart text { font: 10px ui-monospace, Menlo, monospace; fill: #888; }
+.chart .grid { stroke: #eee; }
+.chart .dead { fill: #f2f2f2; }
+.chart .trace { fill: none; stroke: #0969da; stroke-width: 1.5; }
+.chart .trace.dim { stroke: #bbb; stroke-width: 1; stroke-dasharray: 3 3; }
+.chart .trigger { stroke: #1a7f37; }
+.chart .limit { stroke: #cf222e; stroke-dasharray: 5 3; }
+.chart .window { stroke: #8250df; stroke-dasharray: 2 3; }
+.chart .key { fill: #666; }
+.chart .lane { fill: #f0f0f0; }
+.chart .lane.hit { fill: #cf222e; }
+.warn { color: #cf222e; }
 """

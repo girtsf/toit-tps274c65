@@ -21,11 +21,11 @@ Then:
 import tps274c65
 ```
 
-See `examples/*.toit`.
+## Web Server
 
 You can `jag run examples/webserver/main.toit` to start a web UI that shows the
-switch state, decoded faults and the ADC readings, and lets you poke at
-registers.
+switch state, decoded faults and the ADC readings, lets you poke at registers,
+and plots the current a channel draws as it switches on.
 
 ![The web UI](examples/webserver/screenshot.png)
 

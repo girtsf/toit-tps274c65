@@ -92,6 +92,7 @@ function update(data, source) {
   }
   if (data.limits) applyLimits(data.limits);
   if (data.adc) applyAdc(data.adc);
+  if (data.capture) applyCapture(data.capture);
   var access = data.register;
   if (access) {
     logLine((access.written ? "write " : "read  ") + hex2(access.address) + " " +
@@ -202,6 +203,228 @@ function cell(text, raw, dim) {
   }
   if (dim) td.className = "off";
   return td;
+}
+
+// The turn-on capture box. Nothing here is polled: a capture holds the bus
+// for its whole length and switches a channel on, so it only ever happens
+// because the button was pressed.
+var CHART = {w: 720, h: 280, left: 56, right: 16, top: 14, bottom: 58};
+// The fault lane, between the plot and the time axis.
+var LANE = {gap: 8, height: 8};
+
+function buildCaptureChannels() {
+  var select = document.getElementById("cap-channel");
+  for (var channel = 1; channel <= 4; channel++) {
+    var option = document.createElement("option");
+    option.value = channel;
+    option.textContent = "CH" + channel;
+    select.appendChild(option);
+  }
+}
+
+function runCapture() {
+  var button = document.getElementById("cap-run");
+  button.disabled = true;
+  document.getElementById("cap-stats").textContent = "capturing...";
+  var body = {
+    channel: Number(document.getElementById("cap-channel").value),
+    preMs: Number(document.getElementById("cap-pre").value),
+    postMs: Number(document.getElementById("cap-post").value)
+  };
+  // The device is off the air for the length of the capture plus the
+  // discharge wait, so the poll behind act() queues behind it.
+  act(api("/api/capture", body)).then(function () { button.disabled = false; });
+}
+
+function applyCapture(data) {
+  var line = "CH" + data.channel + "  " + data.micros.length + " points  peak " +
+      data.peakMilliAmps.toFixed(0) + " mA  " + data.frames + " frames in " +
+      (data.spanMicros / 1000).toFixed(1) + " ms, " +
+      data.frameMicros.toFixed(1) + " us each";
+  line += "  --  faults seen: " + bitNames(data.faultsSeenBits);
+  var bad = false;
+  // The bus is meant to outrun the device. If it stops doing that the trace
+  // is missing conversions and the shape is no longer trustworthy.
+  if (data.frameMicros > data.conversionMicros) {
+    line += "  --  BUS SLOWER THAN THE ADC, points are being missed";
+    bad = true;
+  }
+  // The point bound is derived from the window, so this should not happen
+  // at all -- and if it does, the tail of the trace is simply gone.
+  if (data.truncated) {
+    line += "  --  TRUNCATED, the trace ends early";
+    bad = true;
+  }
+  var stats = document.getElementById("cap-stats");
+  stats.textContent = line;
+  stats.className = bad ? "mono warn" : "mono";
+  drawCapture(data);
+}
+
+function svgEl(name, attrs) {
+  var node = document.createElementNS("http://www.w3.org/2000/svg", name);
+  for (var key in attrs) node.setAttribute(key, attrs[key]);
+  return node;
+}
+
+// A round tick step of about a sixth of the span, so the axis reads 0, 10,
+// 20 rather than 0, 8.33, 16.67.
+function niceStep(span, divisions) {
+  var raw = span / divisions;
+  if (!(raw > 0)) return 1;
+  var magnitude = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
+  var normalised = raw / magnitude;
+  var step = normalised >= 5 ? 5 : normalised >= 2 ? 2 : 1;
+  return step * magnitude;
+}
+
+// The trace is a step function: a point is a value and the time it started,
+// and it holds until the next one. So the line goes across before it goes up,
+// and never diagonally -- a slope would draw current the device never
+// reported.
+function stairs(data, from, X, Y) {
+  var points = [];
+  for (var i = from; i < data.micros.length; i++) {
+    var x = X(data.micros[i] / 1000);
+    if (i > from) points.push(x + "," + Y(data.milliAmps[i - 1]));
+    points.push(x + "," + Y(data.milliAmps[i]));
+  }
+  return points.join(" ");
+}
+
+function drawCapture(data) {
+  var host = document.getElementById("cap-chart");
+  host.innerHTML = "";
+  var count = data.micros.length;
+  if (count < 2) return;
+
+  var plotWidth = CHART.w - CHART.left - CHART.right;
+  var plotHeight = CHART.h - CHART.top - CHART.bottom;
+  var t0 = data.micros[0] / 1000;
+  var t1 = data.micros[count - 1] / 1000;
+  if (t1 <= t0) t1 = t0 + 1;
+  var limit = data.limit ?
+      Math.max(data.limit.inrushMilliAmps, data.limit.steadyMilliAmps) : 0;
+  // Room above the taller of the trace and the limit, so the limit lines
+  // stay on the chart even when the trace never reaches them.
+  var full = Math.max(data.peakMilliAmps, limit) * 1.15;
+  if (!(full > 0)) full = 100;
+
+  function X(ms) {
+    return CHART.left + (ms - t0) / (t1 - t0) * plotWidth;
+  }
+  function Y(milliAmps) {
+    return CHART.top + plotHeight - Math.min(1, milliAmps / full) * plotHeight;
+  }
+
+  var svg = svgEl("svg", {"class": "chart",
+                          viewBox: "0 0 " + CHART.w + " " + CHART.h});
+
+  // The dead zone: the device is not sensing yet, so whatever the register
+  // says there is left over from before the turn-on.
+  var deadEnd = Math.min(X(data.settlingMicros / 1000), CHART.left + plotWidth);
+  if (deadEnd > X(0)) {
+    svg.appendChild(svgEl("rect", {"class": "dead", x: X(0), y: CHART.top,
+                                   width: deadEnd - X(0), height: plotHeight}));
+  }
+
+  // Horizontal grid and the current axis.
+  var currentStep = niceStep(full, 4);
+  for (var level = 0; level <= full; level += currentStep) {
+    svg.appendChild(svgEl("line", {"class": "grid", x1: CHART.left, x2: CHART.left + plotWidth,
+                                   y1: Y(level), y2: Y(level)}));
+    var label = svgEl("text", {x: CHART.left - 6, y: Y(level) + 3,
+                               "text-anchor": "end"});
+    label.textContent = level.toFixed(0);
+    svg.appendChild(label);
+  }
+  var unit = svgEl("text", {x: CHART.left - 6, y: CHART.top - 4, "text-anchor": "end"});
+  unit.textContent = "mA";
+  svg.appendChild(unit);
+
+  // Time axis, anchored on zero so the switch write is always a tick.
+  var timeStep = niceStep(t1 - t0, 6);
+  var first = Math.ceil(t0 / timeStep) * timeStep;
+  for (var when = first; when <= t1; when += timeStep) {
+    svg.appendChild(svgEl("line", {"class": "grid", x1: X(when), x2: X(when),
+                                   y1: CHART.top, y2: CHART.top + plotHeight}));
+    var tick = svgEl("text", {x: X(when), y: CHART.h - 22, "text-anchor": "middle"});
+    tick.textContent = when.toFixed(timeStep < 1 ? 1 : 0);
+    svg.appendChild(tick);
+  }
+  // On its own baseline under the ticks: at the right edge it would sit on
+  // top of the last one.
+  var axis = svgEl("text", {x: CHART.left + plotWidth / 2, y: CHART.h - 8,
+                            "text-anchor": "middle"});
+  axis.textContent = "milliseconds from the switch write";
+  svg.appendChild(axis);
+
+  // The limits the current is being held at. Two lines when the inrush
+  // window has a limit of its own, one when it does not.
+  if (data.limit) {
+    drawLevel(svg, X, Y, data.limit.inrushMilliAmps, plotWidth,
+              data.limit.timeout ? "limit" : "inrush limit");
+    if (data.limit.inrushMilliAmps !== data.limit.steadyMilliAmps) {
+      drawLevel(svg, X, Y, data.limit.steadyMilliAmps, plotWidth, "after the window");
+    }
+    // Where the inrush window ends and the limit changes back.
+    var windowEnd = data.limit.windowMs;
+    if (windowEnd > 0 && windowEnd <= t1) {
+      svg.appendChild(svgEl("line", {"class": "window", x1: X(windowEnd), x2: X(windowEnd),
+                                     y1: CHART.top, y2: CHART.top + plotHeight}));
+      var mark = svgEl("text", {"class": "key", x: X(windowEnd) + 3, y: CHART.top + 22});
+      mark.textContent = "window ends";
+      svg.appendChild(mark);
+    }
+  }
+
+  // The fault lane: where the device was reporting a current limit. A
+  // channel being held at the limit is regulating rather than fully on, and
+  // the current sense is gated on being fully on -- so the conversion sits on
+  // whatever it last held, which is usually zero. Without this lane that
+  // stretch reads as "no current" instead of "not sensing".
+  var laneTop = CHART.top + plotHeight + LANE.gap;
+  svg.appendChild(svgEl("rect", {"class": "lane", x: CHART.left, y: laneTop,
+                                 width: plotWidth, height: LANE.height}));
+  for (var i = 0; i < count - 1; i++) {
+    if ((data.faults[i] & data.ilimitMask) === 0) continue;
+    var from = X(data.micros[i] / 1000);
+    var to = X(data.micros[i + 1] / 1000);
+    svg.appendChild(svgEl("rect", {"class": "lane hit", x: from, y: laneTop,
+                                   width: Math.max(1, to - from),
+                                   height: LANE.height}));
+  }
+  var laneLabel = svgEl("text", {"class": "key", x: CHART.left - 6,
+                                 y: laneTop + LANE.height, "text-anchor": "end"});
+  laneLabel.textContent = "ILIMIT";
+  svg.appendChild(laneLabel);
+
+  // The switch write itself.
+  svg.appendChild(svgEl("line", {"class": "trigger", x1: X(0), x2: X(0),
+                                 y1: CHART.top, y2: CHART.top + plotHeight}));
+  var trigger = svgEl("text", {"class": "key", x: X(0) + 3, y: CHART.top + 10});
+  trigger.textContent = "on";
+  svg.appendChild(trigger);
+
+  // The trace twice: the whole of it faintly, then the part that is a real
+  // measurement solidly on top of it.
+  svg.appendChild(svgEl("polyline", {"class": "trace dim",
+                                     points: stairs(data, 0, X, Y)}));
+  if (data.validIndex < count - 1) {
+    svg.appendChild(svgEl("polyline", {"class": "trace",
+                                       points: stairs(data, data.validIndex, X, Y)}));
+  }
+  host.appendChild(svg);
+}
+
+function drawLevel(svg, X, Y, milliAmps, plotWidth, text) {
+  svg.appendChild(svgEl("line", {"class": "limit", x1: CHART.left,
+                                 x2: CHART.left + plotWidth,
+                                 y1: Y(milliAmps), y2: Y(milliAmps)}));
+  var label = svgEl("text", {"class": "key", x: CHART.left + plotWidth - 2,
+                             y: Y(milliAmps) - 4, "text-anchor": "end"});
+  label.textContent = text + " " + milliAmps + " mA";
+  svg.appendChild(label);
 }
 
 // The current-limit box. Its selects are built once from the tables the
@@ -428,6 +651,7 @@ function poll() {
 }
 
 buildChannels();
+buildCaptureChannels();
 api("/api/registers").then(function (data) { buildRegisters(data.registers); }).catch(fail);
 var optionsReady = api("/api/options").then(buildLimitOptions);
 optionsReady.catch(fail);

@@ -48,11 +48,12 @@ until curl -sf -o /dev/null "$URL"; do
   sleep 1
 done
 
-# Read and write a few registers, then turn two channels on, so the page has
-# both a switch state and a readout to show. Everything called here is a function the
-# page itself defines, so this drives the real UI rather than faking its
-# output. The registers read here are plain `RW`, on purpose: reading
-# ILIMIT_CH_STAT would clear the ILIMIT fault the picture is meant to show.
+# Read and write a few registers, turn two channels on, then take a capture,
+# so the page has a switch state, a readout and a trace to show. Everything
+# called here is a function the page itself defines, so this drives the real
+# UI rather than faking its output. The registers read here are plain `RW`, on
+# purpose: reading ILIMIT_CH_STAT would clear the ILIMIT fault the picture is
+# meant to show.
 uvx shot-scraper shot "$URL" \
   --width 820 \
   --wait-for 'state !== null' \
@@ -65,15 +66,21 @@ uvx shot-scraper shot "$URL" \
   selectRegister(0x24); doRead();                await settle();
   selectRegister(0x25); doRead();                await settle();
   selectRegister(0x21);
-  document.getElementById("val").value = "0a";
+  document.getElementById("val").value = "7a";
   doWrite();                                     await settle();
   setSwitch(0b0101);                             await settle();
   readGlobal();                                  await settle();
-  // Open the two collapsible boxes, each of which reads what it shows.
+  // Open the three collapsible boxes, each of which reads what it shows.
   // Collapsed is their default, but a collapsed box makes for a picture of
   // nothing.
-  document.getElementById("adc").open = true;    await settle();
-  document.getElementById("limits").open = true; await settle();
+  document.getElementById("adc").open = true;     await settle();
+  document.getElementById("limits").open = true;  await settle();
+  document.getElementById("capture").open = true; await settle();
+  // And take a trace, on the channel the fault scenario has in current
+  // limit. It switches that channel on, so it goes last.
+  document.getElementById("cap-channel").value = "2";
+  runCapture();
+  await new Promise(done => setTimeout(done, 2000));
 })()
 JS
 )" \

@@ -70,6 +70,50 @@ polled only while it is open.</p>
 </section>
 
 <section>
+<details id="capture">
+<summary><h2>Turn-on capture</h2></summary>
+
+<div class="row">
+<span class="field">channel</span>
+<select id="cap-channel"></select>
+<span class="field">ms before / after</span>
+<input id="cap-pre" size="3" value="5" title="milliseconds of baseline">
+<input id="cap-post" size="3" value="45" title="milliseconds after the switch write">
+<button id="cap-run" onclick="runCapture()">capture</button>
+</div>
+
+<div id="cap-chart"></div>
+<p class="mono" id="cap-stats">not captured</p>
+
+<p class="note">Switches the channel on and records its current sense across
+the event, with the whole ADC round robin trimmed down to that one conversion
+so a reading lands every 128 us instead of every 1.7 ms. The switching edge is
+not in the trace and cannot be -- the FET is fully on inside 42 us -- and the
+first half millisecond after the write, shaded, is the device's own sense
+settling and is not a measurement. What the trace is for is the inrush window,
+which runs 2 ms to 64 ms. The red line is the limit; do not expect the trace
+to sit on it, because a channel being held at the limit reads zero rather
+than reading the limit -- see the ILIMIT lane below. A channel that is already on is switched off first and given
+200 ms to discharge, and is left on at the end.</p>
+
+<p class="note">The ILIMIT lane under the plot is the fault byte, which every
+frame carries for free. Read it before reading a flat stretch of zero as no
+current: the sense is gated on the switch being fully on, and a channel held
+at the limit is regulating rather than fully on, so its conversion register
+sits on whatever it last held. Zero with ILIMIT under it is the device
+declining to sense, not a channel drawing nothing.</p>
+
+<p class="note">For the length of the capture the device is put on the
+real-time fault path (FLT_LTCH_DIS in DEV_CONFIG5, restored afterwards). The
+fault bits latch by default and clear only when the read-to-clear register
+behind them is read, which a capture will not do -- so on the latched path the
+lane could turn red and never turn back, and a fault latched before the
+capture would cover the whole trace. On the real-time path it follows the
+condition, so both its edges mean something.</p>
+</details>
+</section>
+
+<section>
 <h2>Registers</h2>
 <div class="row">
 <select id="reg"></select>

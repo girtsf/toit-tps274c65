@@ -69,6 +69,8 @@ class Ui:
       if request.method == http.GET: return read-adc_
       return set-adc_ (json.decode-stream request.body)["enabled"]
     if resource == "/api/state": return state_
+    if resource == "/api/capture":
+      return capture_ (json.decode-stream request.body)
     if resource == "/api/global-faults":
       json.decode-stream request.body  // Drain the empty body.
       return read-global-faults_
@@ -233,6 +235,93 @@ class Ui:
         adc["supplyVolts"] = tps274c65.adc-volts supply
             --full-scale=tps274c65.ADC-FULL-SCALE-10-BIT
     return with-adc_ adc
+
+  /**
+  Captures the turn-on current of a channel and answers with the trace.
+
+  Holds the bus for the length of the capture, so the once-a-second poll
+    waits on it. That is the point: nothing else may put a frame on the bus
+    while the ADC is trimmed down to the one conversion.
+
+  The channel is left on afterwards. Comes back with the current limit
+    configuration alongside the trace, because a trace of an inrush is not
+    readable without the limit it ran into -- see $capture-limit_.
+
+  The fault byte of every point comes back too. It costs no frames, and it is
+    what makes a flat stretch of zero readable: the sense is gated on the
+    switch being fully on, so a channel held in current limit reads zero
+    rather than reading the limit. `ILIMIT` across the flat part says that is
+    what happened.
+  */
+  capture_ payload/Map -> Map:
+    // The page sends these as JSON numbers, so a field somebody typed a
+    // fraction into arrives as a float. Duration takes whole milliseconds.
+    channel := (payload["channel"]).to-int
+    pre := Duration --ms=(payload.get "preMs" --if-absent=: 5).to-int
+    post := Duration --ms=(payload.get "postMs" --if-absent=: 45).to-int
+    capture/tps274c65.Capture? := null
+    limit/Map? := null
+    mutex_.do:
+      capture = tps274c65.capture-turn-on driver_ channel --pre=pre --post=post
+      limit = capture-limit_ channel
+    trace := capture as tps274c65.Capture
+    result := state_
+    result["capture"] = {
+      "channel": trace.channel,
+      "micros": trace.micros,
+      "raw": List trace.size: trace.raw[it],
+      "faults": List trace.size: trace.faults[it],
+      "faultsSeen": trace.faults-seen,
+      "faultsSeenBits": bits-payload (tps274c65.decode-faults trace.faults-seen),
+      "ilimitMask": tps274c65.FAULT-ILIMIT,
+      "milliAmps": trace.to-milli-amps,
+      "peakMilliAmps": trace.peak-milli-amps,
+      "triggerIndex": trace.trigger-index,
+      "validIndex": trace.valid-index,
+      "settlingMicros": tps274c65.ADC-CURRENT-SETTLING-TIME.in-us,
+      "conversionMicros": tps274c65.ADC-CONVERSION-TIME.in-us,
+      "frames": trace.frames,
+      "spanMicros": trace.span-micros,
+      "frameMicros": trace.frame-micros,
+      "truncated": trace.truncated,
+      "senseResistor": tps274c65.DEFAULT-SENSE-RESISTOR-OHMS,
+      "limit": limit,
+    }
+    return result
+
+  /**
+  Returns the current limit $channel just ran into, for the trace to draw.
+
+  Which register governs the channel depends on `ILIM_SET`, and what the
+    limit is during the inrush window depends on `ILIM_CONFIG` and
+    `INRUSH_LIMIT` -- so this is three reads and a little decoding rather
+    than one number. Costs six frames, outside the capture.
+  */
+  capture-limit_ channel/int -> Map:
+    config1 := driver_.read-register tps274c65.REG-DEV-CONFIG1
+    config2 := driver_.read-register tps274c65.REG-DEV-CONFIG2
+    config3 := driver_.read-register tps274c65.REG-DEV-CONFIG3
+    split := (config3 & tps274c65.CONFIG3-ILIM-SET) != 0
+    governing := (split and channel > 2) ? config2 : config1
+    code := tps274c65.IlimCode.ALL[governing & tps274c65.ILIM-REG-MASK]
+    window := tps274c65.InrushWindow.ALL[
+        (governing & tps274c65.ILIM-DURATION-MASK) >> tps274c65.ILIM-DURATION-SHIFT]
+    steady := code.milli-amps
+    // With ILIM_CONFIG set the limit never changes and the window is a
+    // timeout instead, so the multiplier does not apply.
+    timeout := (config3 & tps274c65.CONFIG3-ILIM-CONFIG) != 0
+    inrush := steady
+    if not timeout:
+      selector := config3 & tps274c65.CONFIG3-INRUSH-LIMIT-MASK
+      if selector == tps274c65.INRUSH-LIMIT-2X: inrush = steady * 2
+      else if selector == tps274c65.INRUSH-LIMIT-HALF: inrush = steady / 2
+      else if selector == tps274c65.INRUSH-LIMIT-FIXED: inrush = 2200
+    return {
+      "steadyMilliAmps": steady,
+      "inrushMilliAmps": inrush,
+      "windowMs": window.ms,
+      "timeout": timeout,
+    }
 
   /**
   Starts or stops the ADC, and answers with a fresh set of readings.
