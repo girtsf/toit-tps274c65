@@ -8,6 +8,7 @@ main:
   test-read-touches-the-register-once
   test-read-does-not-disturb-outputs
   test-read-picks-up-faults
+  test-global-faults-mask-the-phantom-bit
   test-write
   test-set-channel
   test-set-leds
@@ -77,6 +78,26 @@ test-read-touches-the-register-once:
   // A fault that latches after the first read is still reported.
   device.contents[REG-FAULT-GLOBAL-TYPE] = GLOBAL-WD-ERR
   expect-equals GLOBAL-WD-ERR driver.read-global-faults
+
+/**
+Bit 7 of FAULT_GLOBAL_TYPE never reaches the caller.
+
+A healthy device sets it however the datasheet describes it, so a caller
+  comparing the raw byte against zero would never see a clean device.
+*/
+test-global-faults-mask-the-phantom-bit:
+  device := FakeDevice
+  device.reserved-ones[REG-FAULT-GLOBAL-TYPE] = 0x80
+  driver := Driver device
+
+  // Nothing wrong with the device, and it still answers 0x80 on the bus.
+  expect-equals 0 driver.read-global-faults
+  expect-equals 0x80 (driver.read-register REG-FAULT-GLOBAL-TYPE)
+
+  // A real fault alongside the phantom bit comes back on its own.
+  device.contents[REG-FAULT-GLOBAL-TYPE] = GLOBAL-WD-ERR
+  expect-equals GLOBAL-WD-ERR driver.read-global-faults
+  expect-equals (0x80 | GLOBAL-WD-ERR) (driver.read-register REG-FAULT-GLOBAL-TYPE)
 
 /** Reading resends the switch state, so the outputs keep their state. */
 test-read-does-not-disturb-outputs:

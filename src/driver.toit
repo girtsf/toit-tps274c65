@@ -459,9 +459,15 @@ class Driver:
     and $GLOBAL-VS-UV. Read this twice during bring-up and expect the second
     read to come back clean. $GLOBAL-POR appearing later means the device
     reset and lost its configuration.
+
+  Masked with $GLOBAL-FAULT-MASK, so clean really is zero. The register
+    itself does not read that way: bit 7 comes back set on a healthy device
+    whatever the datasheet says about it being reserved, and a caller
+    comparing the raw byte against zero would never see a device it was
+    happy with. Read the register through $read-register for the raw byte.
   */
   read-global-faults -> int:
-    return read-register REG-FAULT-GLOBAL-TYPE
+    return (read-register REG-FAULT-GLOBAL-TYPE) & GLOBAL-FAULT-MASK
 
   /**
   Turns all channels off.

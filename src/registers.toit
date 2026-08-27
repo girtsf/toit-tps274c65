@@ -172,6 +172,15 @@ GLOBAL-VDD-UVLO ::= 1 << 2
 GLOBAL-VS-UV-WRN ::= 1 << 1
 /** VS dropped below the undervoltage protection threshold. */
 GLOBAL-VS-UV ::= 1 << 0
+/**
+The bits of $REG-FAULT-GLOBAL-TYPE that mean anything.
+
+Bit 7 is not one of them. The datasheet calls it reserved with a reset value
+  of 0, and the device reads it back as one regardless, so a device with
+  nothing wrong with it answers 80h rather than 00h. Mask a reading with this
+  before comparing it against zero.
+*/
+GLOBAL-FAULT-MASK ::= 0x7f
 
 // DEV_CONFIG1 ($REG-DEV-CONFIG1) and DEV_CONFIG2 ($REG-DEV-CONFIG2) fields.
 //
