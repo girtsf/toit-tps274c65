@@ -408,6 +408,15 @@ Clear out of reset, so every conversion result reads 0 until this is set.
 */
 CONFIG5-ADC-EN ::= 1 << 5
 /**
+Takes the fault bits off the latched path and onto the live one.
+
+Clear, the reset state, latches: a bit clears only when the detail register
+  behind it is read and the condition has gone. Set, the bits follow the
+  condition. Latched is right for anything transient; live is what
+  `capture-turn-on` wants.
+*/
+CONFIG5-FLT-LTCH-DIS ::= 1 << 0
+/**
 The bits of $REG-DEV-CONFIG5 that are not reserved.
 
 Bits 7 and 6 are, and they read back as ones, so a read-modify-write has to
@@ -428,6 +437,10 @@ ADC1-VSNS-DIS ::= 1 << 2
 ADC1-ISNS-DIS ::= 1 << 1
 /** Drops the supply voltage conversion. */
 ADC1-VS-DIS ::= 1 << 0
+/** The bits of $REG-ADC-CONFIG1 that are not reserved. */
+ADC-CONFIG1-WRITABLE-MASK ::= 0x0f
+/** The channel bits of $REG-ADC-ISNS-DIS, $REG-ADC-TSNS-DIS and $REG-ADC-VSNS-DIS. */
+ADC-CHANNEL-DIS-MASK ::= 0x0f
 
 /** The internal ADC reference, in millivolts. */
 ADC-REFERENCE-MV ::= 2800

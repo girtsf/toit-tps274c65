@@ -17,7 +17,7 @@ test: install-pkgs
 	done
 
 analyze: install-pkgs
-	$(TOIT) analyze src/*.toit
+	$(TOIT) analyze src/*.toit src/misc/*.toit
 	cd tests && $(TOIT) analyze *-test.toit
 	cd examples && $(TOIT) analyze *.toit
 	cd examples/webserver && $(TOIT) analyze *.toit

@@ -46,6 +46,14 @@ class FakeDevice implements spi.Device:
   /** How many times each address has been addressed by a frame. */
   accesses/Map ::= {:}
 
+  /**
+  Called with the address of every frame, before its value is captured.
+
+  A hook for registers that move on their own. A test of a capture uses it to
+    walk a conversion result along while the driver reads it.
+  */
+  on-frame/Lambda? := null
+
   /** The register whose contents the next frame will return. */
   pending_/int := 0
 
@@ -78,6 +86,7 @@ class FakeDevice implements spi.Device:
     // The device captures the addressed register for the next frame to
     // return, and a read-to-clear register empties as it is captured.
     accesses.update register --init=0: it + 1
+    if on-frame: on-frame.call register
     captured_ = (contents.get register --if-absent=: 0)
         | (reserved-ones.get register --if-absent=: 0)
     if read-to-clear.contains register:
