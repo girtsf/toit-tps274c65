@@ -71,6 +71,8 @@ class Driver:
   switch-state_/int := 0
   leds_/int := 0
   faults_/int := 0
+  /** The one buffer every frame goes out in. See $transfer_. */
+  frame_/ByteArray ::= ByteArray 2
 
   /**
   Constructs a driver talking to given SPI device.
@@ -469,8 +471,19 @@ class Driver:
   close -> none:
     write-register REG-SW-STATE 0
 
+  /**
+  Sends $frame and returns its data byte, refreshing $faults from its fault
+    byte.
+
+  Reuses one buffer rather than allocating a frame each time. A tight read
+    loop sends thousands of these back to back, and the garbage would show up
+    as scheduler jitter. Safe because the transfer is synchronous and the
+    answer is read out of the buffer before the next call, and because a
+    $Driver is not safe to share between tasks anyway.
+  */
   transfer_ frame/int -> int:
-    bytes := #[frame >> 8, frame & 0xff]
-    spi_device_.transfer bytes --read
-    faults_ = bytes[0]
-    return bytes[1]
+    frame_[0] = frame >> 8
+    frame_[1] = frame & 0xff
+    spi_device_.transfer frame_ --read
+    faults_ = frame_[0]
+    return frame_[1]
