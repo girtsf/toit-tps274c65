@@ -554,12 +554,17 @@ ADC-TEMPERATURE-OFFSET ::= 0.83
 ADC-TEMPERATURE-SPAN ::= 450.0
 
 /**
-`KSNS`, how many times the load current the SNS pin sources.
+`KSNS`, the ratio of the load current to the current the SNS pin sources.
 
-The datasheet gives one typical value, 1160, measured on the sense range
-  above 800 mA. It says nothing about the range below it, so a device with
-  $CONFIG3-ISNS-RANGE clear may well need another. See $adc-milli-amps,
-  which takes the ratio as an argument for that reason.
+The pin mirrors out one part in 1160, so a 1.16 A load pushes 1 mA through
+  `RSNS`.
+
+The datasheet gives that one typical value, measured on the sense range above
+  800 mA. It says nothing about the range below it, so a device with
+  $CONFIG3-ISNS-RANGE clear may well need another, which is why `Driver`
+  takes it as a constructor argument. $adc-milli-amps has the arithmetic; it
+  inverts to `KSNS = I * RSNS * 1023 / (raw * 2800)`, with the current in
+  milliamps, for calibrating a device against a known load.
 */
 SENSE-RATIO ::= 1160
 /**
