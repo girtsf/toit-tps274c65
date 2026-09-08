@@ -36,16 +36,10 @@ main:
   device.contents[tps274c65.REG-DEV-CONFIG3] = tps274c65.INRUSH-LIMIT-2X
   // The ADC, running, with a set of conversions to match: channels 1 and 3
   // carrying current into a supply that has sagged to 10.5 V, channels 2 and
-  // 4 off and so reading nothing but their junction temperature. The reserved
-  // bits of the registers that have them read back as ones, the way they do
-  // on a real device.
-  device.reserved-ones[tps274c65.REG-DEV-CONFIG5] = 0xc0
+  // 4 off and so reading nothing but their junction temperature. The
+  // reserved bits of these registers read back as ones on a real device, and
+  // $FakeDevice does the same without being told.
   device.contents[tps274c65.REG-DEV-CONFIG5] = tps274c65.CONFIG5-ADC-EN
-  [
-    tps274c65.REG-ADC-RESULT-CH1-I-LSB, tps274c65.REG-ADC-RESULT-CH2-I-LSB,
-    tps274c65.REG-ADC-RESULT-CH3-I-LSB, tps274c65.REG-ADC-RESULT-CH4-I-LSB,
-    tps274c65.REG-ADC-RESULT-VS-LSB,
-  ].do: device.reserved-ones[it] = 0xfc
   set-adc-conversion_ device tps274c65.REG-ADC-RESULT-VS 358  // 10.5 V.
   set-adc-conversion_ device tps274c65.REG-ADC-RESULT-CH1-I 151  // 479 mA.
   set-adc-conversion_ device tps274c65.REG-ADC-RESULT-CH3-I 378  // 1200 mA.

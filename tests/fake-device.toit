@@ -1,7 +1,7 @@
 import io
 import spi
 
-import tps274c65 show FAULT-TYPE-BITS FaultBit REG-SW-STATE
+import tps274c65 show *
 
 /**
 A stand-in for a TPS274C65 on the SPI bus, for testing without hardware.
@@ -39,9 +39,23 @@ class FakeDevice implements spi.Device:
   Bits that read back as ones however they were written, by address.
 
   The device does that for the reserved bits of a register, so SW_STATE reads
-    back as 0xf5 rather than 0x05.
+    back as 0xf5 rather than 0x05. Every register known to have such bits is
+    here, since that is a property of the device rather than of one test: the
+    two spare bits of every ADC LSB register, the top two of DEV_CONFIG5, and
+    bit 7 of FAULT_GLOBAL_TYPE, which the datasheet calls reserved with a
+    reset value of 0 and the device sets anyway. A test that has found
+    another can add it.
   */
-  reserved-ones/Map ::= {REG-SW-STATE: 0xf0}
+  reserved-ones/Map ::= {
+    REG-SW-STATE: 0xf0,
+    REG-FAULT-GLOBAL-TYPE: 0x80,
+    REG-ADC-RESULT-CH1-I-LSB: 0xfc,
+    REG-ADC-RESULT-CH2-I-LSB: 0xfc,
+    REG-ADC-RESULT-CH3-I-LSB: 0xfc,
+    REG-ADC-RESULT-CH4-I-LSB: 0xfc,
+    REG-ADC-RESULT-VS-LSB: 0xfc,
+    REG-DEV-CONFIG5: 0xc0,
+  }
 
   /** How many times each address has been addressed by a frame. */
   accesses/Map ::= {:}
