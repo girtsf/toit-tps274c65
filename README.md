@@ -67,6 +67,9 @@ Some gotchas to watch out for:
   `SW_STATE`. A write to any other register does not feed it. Bench-confirmed,
   so a polling loop keeps the watchdog happy on its own and a
   configuration-only loop does not.
+* Several frames in one chip-select pulse do not work in daisy chain: the
+  device runs the last frame of the pulse and shifts the earlier ones straight
+  back out on SDO, unchanged, without raising `SPI_ERR`.
 * `FAULT_GLOBAL_TYPE` (02h) bit 7 reads back as one though the datasheet calls
   it reserved with reset 0, so a clean device reads 80h rather than 00h.
   `Driver.read-global-faults` masks it off; `read-register` does not.

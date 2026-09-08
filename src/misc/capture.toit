@@ -207,9 +207,10 @@ capture-turn-on driver/Driver channel/int
   // Reserved bits read back as ones in all three, so mask before saving:
   // handing them back on the restore would write a value the device never
   // gave.
-  config5 := (driver.read-register REG-DEV-CONFIG5) & CONFIG5-WRITABLE-MASK
-  adc-config1 := (driver.read-register REG-ADC-CONFIG1) & ADC-CONFIG1-WRITABLE-MASK
-  isns-dis := (driver.read-register REG-ADC-ISNS-DIS) & ADC-CHANNEL-DIS-MASK
+  saved := driver.read-registers [REG-DEV-CONFIG5, REG-ADC-CONFIG1, REG-ADC-ISNS-DIS]
+  config5 := saved[0] & CONFIG5-WRITABLE-MASK
+  adc-config1 := saved[1] & ADC-CONFIG1-WRITABLE-MASK
+  isns-dis := saved[2] & ADC-CHANNEL-DIS-MASK
   try:
     // Everything but this one channel's current comes out of the round, so
     // the round is one conversion long.

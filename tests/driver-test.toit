@@ -5,6 +5,7 @@ import .fake-device
 
 main:
   test-read-is-pipelined
+  test-read-registers-is-pipelined
   test-read-touches-the-register-once
   test-read-does-not-disturb-outputs
   test-read-picks-up-faults
@@ -27,6 +28,7 @@ main:
   test-read-supply-voltage-raw
   test-set-adc
   test-adc-conversions
+  test-read-adc-all
 
 /**
 A read has to spend two frames, because the device answers one frame late.
@@ -54,6 +56,102 @@ test-read-is-pipelined:
 
   // Reading the same register twice in a row gives the same answer.
   expect-equals 0x02 (driver.read-register REG-DEV-CONFIG4)
+
+/**
+A burst read spends one frame per register, plus one to collect the last.
+
+The device answers a read one frame late, so a stream of read frames each
+  carrying the next address collects an answer per frame. That is half of
+  what the same registers cost read one at a time.
+*/
+test-read-registers-is-pipelined:
+  device := FakeDevice
+  device.contents[REG-DEV-CONFIG1] = 0x0a
+  device.contents[REG-DEV-CONFIG4] = 0x02
+  device.contents[REG-LED5-8-CTL] = 0x07
+  driver := Driver device
+
+  registers := [REG-DEV-CONFIG1, REG-DEV-CONFIG4, REG-LED5-8-CTL]
+  expect-equals #[0x0a, 0x02, 0x07] (driver.read-registers registers)
+  expect-equals 4 device.frames.size
+  expect-equals #[REG-DEV-CONFIG1, 0x00] device.frames[0]
+  expect-equals #[REG-DEV-CONFIG4, 0x00] device.frames[1]
+  expect-equals #[REG-LED5-8-CTL, 0x00] device.frames[2]
+  // The collecting frame asks for FAULT_TYPE_STAT, for the reason
+  // $test-read-touches-the-register-once gives.
+  expect-equals #[REG-FAULT-TYPE-STAT, 0x00] device.frames[3]
+  // Each register is addressed once, so a read-to-clear one keeps whatever
+  // latched after it was read.
+  registers.do: expect-equals 1 device.accesses[it]
+
+  // The frames carry the switch state, like any other read.
+  driver.set-channel 2 --on=true
+  driver.read-registers [REG-DEV-CONFIG1]
+  expect-equals #[REG-DEV-CONFIG1, 0b0010] device.frames[5]
+
+  // An empty list costs nothing.
+  expect-equals #[] (driver.read-registers [])
+  expect-equals 7 device.frames.size
+
+  // A bad address is caught before any of the burst goes out.
+  expect-throw "INVALID_ARGUMENT": driver.read-registers [REG-DEV-CONFIG1, 0x80]
+  expect-equals 7 device.frames.size
+
+/**
+Every ADC result comes back in one burst, decoded.
+
+The eighteen result registers are one unbroken run of addresses, so the burst
+  is 19 frames against the 36 the per-reading methods spend.
+*/
+test-read-adc-all:
+  device := FakeDevice
+  device.contents[REG-ADC-RESULT-CH1-I] = 0xff
+  device.contents[REG-ADC-RESULT-CH1-I-LSB] = 0x03
+  device.contents[REG-ADC-RESULT-CH2-I] = 0xc1
+  device.contents[REG-ADC-RESULT-CH2-I-LSB] = 0x02
+  device.contents[REG-ADC-RESULT-CH3-T] = 198
+  device.contents[REG-ADC-RESULT-CH4-V] = 170
+  device.contents[REG-ADC-RESULT-VS] = 0x99
+  device.contents[REG-ADC-RESULT-VS-LSB] = 0x01
+  device.faults = FAULT-ILIMIT
+
+  driver := Driver device
+  readings := driver.read-adc-all
+  expect-equals 19 device.frames.size
+  expect-equals #[REG-ADC-RESULT-CH1-I, 0x00] device.frames[0]
+  expect-equals #[REG-ADC-RESULT-VS-LSB, 0x00] device.frames[17]
+  expect-equals #[REG-FAULT-TYPE-STAT, 0x00] device.frames[18]
+
+  // Ten bits for a current, the low two coming from the register beside it.
+  expect-equals [1023, 0x306, 0, 0] readings.current-raw
+  expect-near_ 3248.0 (readings.current 1)
+  expect-near_ 2457.4 (readings.current 2)
+  // Eight bits for a temperature and an output voltage.
+  expect-equals [0, 0, 198, 0] readings.temperature-raw
+  expect-near_ 24.1 (readings.temperature 3)
+  expect-equals [0, 0, 0, 170] readings.output-voltage-raw
+  expect-near_ 20.0 (readings.output-voltage 4)
+  // And ten again for the supply.
+  expect-equals 0x265 readings.supply-voltage-raw
+  expect-near_ 17.98 readings.supply-voltage
+
+  // The fault byte rides along on the frames, so it costs nothing.
+  expect-equals FAULT-ILIMIT readings.faults
+
+  expect-throw "INVALID_ARGUMENT": readings.current 0
+  expect-throw "INVALID_ARGUMENT": readings.temperature 5
+  expect-throw "INVALID_ARGUMENT": readings.output-voltage 5
+
+  // The sense resistor and ratio are the driver's, not the call's.
+  halved := (Driver device --sense-resistor=500.0).read-adc-all
+  expect-near_ 6496.0 (halved.current 1)
+  expect-equals 500.0 halved.sense-resistor
+  expect-equals SENSE-RATIO halved.sense-ratio
+
+  // The burst answers with what the registers hold, one read at a time or
+  // eighteen at once.
+  expect-equals (driver.read-current-raw 2) readings.current-raw[1]
+  expect-equals (driver.read-supply-voltage-raw) readings.supply-voltage-raw
 
 /**
 The register asked for is addressed exactly once, however many frames it takes.
@@ -91,7 +189,6 @@ A healthy device sets it however the datasheet describes it, so a caller
 */
 test-global-faults-mask-the-phantom-bit:
   device := FakeDevice
-  device.reserved-ones[REG-FAULT-GLOBAL-TYPE] = 0x80
   driver := Driver device
 
   // Nothing wrong with the device, and it still answers 0x80 on the bus.
@@ -390,16 +487,17 @@ test-power-config-is-locked-while-a-channel-is-on:
 
 test-read-current-raw:
   device := FakeDevice
-  device.reserved-ones[REG-ADC-RESULT-CH2-I-LSB] = 0xfc
   device.contents[REG-ADC-RESULT-CH2-I] = 0xc1
   device.contents[REG-ADC-RESULT-CH2-I-LSB] = 0x02
 
   driver := Driver device
   expect-equals 0x306 (driver.read-current-raw 2)
-  // Two registers, two frames each.
-  expect-equals 4 device.frames.size
+  // Two registers in one burst: an address frame each, and one to collect
+  // the second answer.
+  expect-equals 3 device.frames.size
   expect-equals #[REG-ADC-RESULT-CH2-I, 0x00] device.frames[0]
-  expect-equals #[REG-ADC-RESULT-CH2-I-LSB, 0x00] device.frames[2]
+  expect-equals #[REG-ADC-RESULT-CH2-I-LSB, 0x00] device.frames[1]
+  expect-equals #[REG-FAULT-TYPE-STAT, 0x00] device.frames[2]
 
   // Full scale is 3.25 A with the recommended 1 kOhm sense resistor.
   device.contents[REG-ADC-RESULT-CH1-I] = 0xff
@@ -407,7 +505,7 @@ test-read-current-raw:
   expect-equals 1023 (driver.read-current-raw 1)
   expect-near_ 3248.0 (driver.read-current 1)
   // Halving the sense resistor doubles the current a conversion stands for.
-  expect-near_ 6496.0 (driver.read-current 1 --sense-resistor=500.0)
+  expect-near_ 6496.0 ((Driver device --sense-resistor=500.0).read-current 1)
 
   expect-throw "INVALID_ARGUMENT": driver.read-current-raw 0
   expect-throw "INVALID_ARGUMENT": driver.read-current-raw 5
@@ -435,13 +533,12 @@ test-read-8-bit-results:
 /** The supply voltage is 10 bits, like the current, and runs to 30 V. */
 test-read-supply-voltage-raw:
   device := FakeDevice
-  device.reserved-ones[REG-ADC-RESULT-VS-LSB] = 0xfc
   device.contents[REG-ADC-RESULT-VS] = 0x99
   device.contents[REG-ADC-RESULT-VS-LSB] = 0x01
 
   driver := Driver device
   expect-equals 0x265 (driver.read-supply-voltage-raw)
-  expect-equals 4 device.frames.size
+  expect-equals 3 device.frames.size
   expect-near_ 17.98 (driver.read-supply-voltage)
 
 /**
@@ -453,7 +550,6 @@ The register also holds the fault latching and auto retry settings, and its
 */
 test-set-adc:
   device := FakeDevice
-  device.reserved-ones[REG-DEV-CONFIG5] = 0xc0
   driver := Driver device
 
   // Something in the register that has nothing to do with the ADC.
@@ -554,7 +650,6 @@ test-feed-watchdog:
 /** The fail-safe state is written before the bit that puts it to use. */
 test-set-fail-safe-state:
   device := FakeDevice
-  device.reserved-ones[REG-DEV-CONFIG5] = 0xc0
   driver := Driver device
 
   // Something in DEV_CONFIG5 that has nothing to do with the fail-safe state.

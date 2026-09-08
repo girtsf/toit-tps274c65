@@ -23,8 +23,9 @@ See $Driver for the full API, and the `registers.toit` library for the
   register map.
 */
 
-import .misc.capture
+import .adc
 import .driver
+import .misc.capture
 import .registers
 
 export *

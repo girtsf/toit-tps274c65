@@ -612,6 +612,10 @@ ADC-OUTPUT-VOLTAGE-REGISTERS/List ::= [
   REG-ADC-RESULT-CH3-V, REG-ADC-RESULT-CH4-V,
 ]
 
+/** Every ADC result register, in address order. */
+ADC-RESULT-REGISTERS/List ::= List (REG-ADC-RESULT-VS-LSB - REG-ADC-RESULT-CH1-I + 1):
+  REG-ADC-RESULT-CH1-I + it
+
 /**
 Returns the load current the current conversion $raw stands for, in milliamps.
 

@@ -1,5 +1,6 @@
 import spi
 
+import .adc
 import .registers
 
 /** The SPI mode of the device: CPOL = 0, CPHA = 1. */
@@ -71,15 +72,16 @@ class Driver:
   switch-state_/int := 0
   leds_/int := 0
   faults_/int := 0
-  /** The one buffer every frame goes out in. See $transfer_. */
+  /// The one buffer every frame goes out in. See $transfer_.
   frame_/ByteArray ::= ByteArray 2
+  /// `RSNS`, in ohms, that currents are decoded with. See $adc-milli-amps.
+  sense-resistor/float
+  /// `KSNS` that currents are decoded with. See $adc-milli-amps.
+  sense-ratio/int
 
-  /**
-  Constructs a driver talking to given SPI device.
-
-  The device must be configured for $SPI-MODE.
-  */
-  constructor .spi_device_:
+  constructor .spi_device_
+      --.sense-resistor=DEFAULT-SENSE-RESISTOR-OHMS
+      --.sense-ratio=SENSE-RATIO:
 
   /**
   The fault byte the device returned on the most recent frame.
@@ -190,6 +192,37 @@ class Driver:
     transfer_ (build-read-frame register --switch-state=switch-state_)
     return transfer_
         build-read-frame REG-FAULT-TYPE-STAT --switch-state=switch-state_
+
+  /**
+  Reads every register in $registers, in one pipelined burst.
+
+  Returns their contents in the order they were asked for. Costs one frame
+    more than $registers has entries (vs two per register $read-register
+    spends).
+
+  These are separate frames, one CS pulse each. Several frames in a pulse do
+    not work: the device executes the last of them and shifts the rest straight
+    back out on SDO, unchanged.
+
+  Naming a register twice reads it twice, which matters for the read-to-clear
+    ones.
+
+  Refreshes $faults, and resends $switch-state on every frame the way
+    $read-register does.
+  */
+  read-registers registers/List -> ByteArray:
+    values := ByteArray registers.size
+    if registers.is-empty: return values
+    // Check the lot before any of it goes out, rather than halfway through.
+    registers.do: check-register_ it
+    // Discard the first answer: it belongs to whatever was asked for before.
+    transfer_ (build-read-frame registers.first --switch-state=switch-state_)
+    registers.size.repeat: | index/int |
+      next := index + 1 < registers.size
+          ? registers[index + 1]
+          : REG-FAULT-TYPE-STAT
+      values[index] = transfer_ (build-read-frame next --switch-state=switch-state_)
+    return values
 
   /**
   Writes $value into the register at $register.
@@ -426,31 +459,33 @@ class Driver:
   Reads the raw current sense conversion of $channel.
 
   Returns a 10-bit result, running to $ADC-FULL-SCALE-10-BIT. Pass it to
-    $adc-milli-amps for a current. Costs four frames, two per register: the
-    top eight bits and the bottom two live apart.
+    $adc-milli-amps for a current. Costs three frames: the top eight bits and
+    the bottom two live in registers of their own, which $read-registers
+    collects back to back.
 
   A conversion this method assembles can straddle two rounds of the ADC, the
     low bits having been replaced between the two reads. That moves the
     result by less than one step of the eight bits above them, which is
     13 mA with a 1 kOhm `RSNS`. Read the register in $ADC-CURRENT-REGISTERS
-    yourself for those eight bits alone, in half the frames, if that matters
-    more than the resolution.
+    yourself for those eight bits alone, in two frames, if that matters more
+    than the resolution.
   */
   read-current-raw channel/int -> int:
     check-channel_ channel
-    msb := read-register ADC-CURRENT-REGISTERS[channel - 1]
-    lsb := read-register ADC-CURRENT-LSB-REGISTERS[channel - 1]
-    return (msb << 2) | (lsb & 0x03)
+    values := read-registers [
+      ADC-CURRENT-REGISTERS[channel - 1],
+      ADC-CURRENT-LSB-REGISTERS[channel - 1],
+    ]
+    return (values[0] << 2) | (values[1] & 0x03)
 
   /**
   Reads the current through $channel, in milliamps.
 
   Converts what $read-current-raw returns; see there for what it costs and
-    when it holds, and $adc-milli-amps for $sense-resistor and $sense-ratio.
+    when it holds. Decoded with the $sense-resistor and $sense-ratio the
+    driver was constructed with.
   */
-  read-current channel/int
-      --sense-resistor/float=DEFAULT-SENSE-RESISTOR-OHMS
-      --sense-ratio/int=SENSE-RATIO -> float:
+  read-current channel/int -> float:
     return adc-milli-amps (read-current-raw channel)
         --sense-resistor=sense-resistor
         --sense-ratio=sense-ratio
@@ -499,13 +534,12 @@ class Driver:
   Reads the raw supply voltage conversion.
 
   Returns a 10-bit result, running to $ADC-FULL-SCALE-10-BIT. Pass it to
-    $adc-volts for a voltage. Costs four frames, and can straddle two rounds
+    $adc-volts for a voltage. Costs three frames, and can straddle two rounds
     of the ADC the way $read-current-raw can.
   */
   read-supply-voltage-raw -> int:
-    msb := read-register REG-ADC-RESULT-VS
-    lsb := read-register REG-ADC-RESULT-VS-LSB
-    return (msb << 2) | (lsb & 0x03)
+    values := read-registers [REG-ADC-RESULT-VS, REG-ADC-RESULT-VS-LSB]
+    return (values[0] << 2) | (values[1] & 0x03)
 
   /**
   Reads the supply voltage, in volts.
@@ -515,6 +549,43 @@ class Driver:
   */
   read-supply-voltage -> float:
     return adc-volts read-supply-voltage-raw --full-scale=ADC-FULL-SCALE-10-BIT
+
+  /**
+  Reads every result the ADC holds, in one pipelined burst.
+
+  Costs 19 frames. The $sense-resistor and $sense-ratio the driver was
+    constructed with go into the $AdcReadings, which decodes the currents
+    with them.
+
+  Every result reads zero while the ADC is off, which decodes to no current,
+    no output voltage and 373 degrees. See $set-adc, and $adc-enabled to tell
+    a stopped ADC from a cold one.
+
+  The eighteen results are not from one instant and will likely see data
+    spanning multiple ADC cycles, including for current that gets assembled from
+    two registers (see $read-current-raw).
+  */
+  read-adc-all -> AdcReadings:
+    values := read-registers ADC-RESULT-REGISTERS
+    // The results are one unbroken run of addresses, so a register names its
+    // own place in the answer.
+    base := ADC-RESULT-REGISTERS.first
+    current := List CHANNEL-COUNT: | index/int |
+      msb := values[ADC-CURRENT-REGISTERS[index] - base]
+      lsb := values[ADC-CURRENT-LSB-REGISTERS[index] - base]
+      (msb << 2) | (lsb & 0x03)
+    temperature := List CHANNEL-COUNT: values[ADC-TEMPERATURE-REGISTERS[it] - base]
+    output-voltage := List CHANNEL-COUNT: values[ADC-OUTPUT-VOLTAGE-REGISTERS[it] - base]
+    supply := (values[REG-ADC-RESULT-VS - base] << 2)
+        | (values[REG-ADC-RESULT-VS-LSB - base] & 0x03)
+    return AdcReadings.private_
+        current
+        temperature
+        output-voltage
+        supply
+        faults_
+        sense-resistor
+        sense-ratio
 
   /**
   Sets the bits of $set in $register and clears those of $clear.
