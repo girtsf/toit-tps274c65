@@ -193,9 +193,9 @@ class Ui:
   /**
   Reads every ADC result there is, and whether the ADC is running at all.
 
-  All of them are plain `R`, so this has no side effects. It costs 38 frames
-    though -- thirteen conversions, of which the five ten-bit ones take two
-    registers and so four frames each, plus `DEV_CONFIG5` -- which is why the
+  All of them are plain `R`, so this has no side effects. It costs 21 frames
+    -- two to see whether the ADC is running at all, and nineteen for the
+    burst that collects all eighteen result registers -- which is why the
     page asks for it only while the box is open.
 
   Reads nothing when the ADC is off. Every result register would read 0,
@@ -208,32 +208,27 @@ class Ui:
       "channels": null,
       "supply": null,
       "supplyVolts": null,
-      "senseResistor": tps274c65.DEFAULT-SENSE-RESISTOR-OHMS,
+      "senseResistor": driver_.sense-resistor,
     }
     mutex_.do:
       if driver_.adc-enabled:
         adc["enabled"] = true
+        readings := driver_.read-adc-all
         channels := []
-        tps274c65.CHANNEL-COUNT.repeat:
-          channel := it + 1
-          current := driver_.read-current-raw channel
-          temperature := driver_.read-temperature-raw channel
-          voltage := driver_.read-output-voltage-raw channel
+        tps274c65.CHANNEL-COUNT.repeat: | index/int |
+          channel := index + 1
           channels.add {
             "channel": channel,
-            "current": current,
-            "milliAmps": tps274c65.adc-milli-amps current,
-            "temperature": temperature,
-            "celsius": tps274c65.adc-celsius temperature,
-            "voltage": voltage,
-            "volts": tps274c65.adc-volts voltage
-                --full-scale=tps274c65.ADC-FULL-SCALE-8-BIT,
+            "current": readings.current-raw[index],
+            "milliAmps": readings.current channel,
+            "temperature": readings.temperature-raw[index],
+            "celsius": readings.temperature channel,
+            "voltage": readings.output-voltage-raw[index],
+            "volts": readings.output-voltage channel,
           }
         adc["channels"] = channels
-        supply := driver_.read-supply-voltage-raw
-        adc["supply"] = supply
-        adc["supplyVolts"] = tps274c65.adc-volts supply
-            --full-scale=tps274c65.ADC-FULL-SCALE-10-BIT
+        adc["supply"] = readings.supply-voltage-raw
+        adc["supplyVolts"] = readings.supply-voltage
     return with-adc_ adc
 
   /**
@@ -284,7 +279,7 @@ class Ui:
       "spanMicros": trace.span-micros,
       "frameMicros": trace.frame-micros,
       "truncated": trace.truncated,
-      "senseResistor": tps274c65.DEFAULT-SENSE-RESISTOR-OHMS,
+      "senseResistor": driver_.sense-resistor,
       "limit": limit,
     }
     return result
