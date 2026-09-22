@@ -23,6 +23,8 @@ main:
       --cs=CS
       --frequency=1_000_000
       --mode=tps274c65.SPI-MODE
+      // TPS274C65 requires at least 45ns between CS dropping and first SCLK.
+      --cs-setup-cycles=1
   driver := tps274c65.Driver device
   try:
     // A fresh device reports power-on reset and undervoltage. Read twice to

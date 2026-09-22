@@ -73,6 +73,8 @@ Some gotchas to watch out for:
 * `FAULT_GLOBAL_TYPE` (02h) bit 7 reads back as one though the datasheet calls
   it reserved with reset 0, so a clean device reads 80h rather than 00h.
   `Driver.read-global-faults` masks it off; `read-register` does not.
+* Pass `--cs-setup-cycles=1` to `bus.device`, otherwise there is no delay
+  between CS dropping and first SCLK rising, vs datasheet wants 45ns.
 
 ## AI Disclosure
 
