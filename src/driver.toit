@@ -508,6 +508,51 @@ class Driver:
     return ((read-register REG-DEV-CONFIG5) & CONFIG5-ADC-EN) != 0
 
   /**
+  Selects which conversions the ADC makes.
+
+  $current, $temperature and $output-voltage are masks of the channels to
+    convert, bit 0 for channel 1; see $channel-mask. $supply-voltage says
+    whether the supply is converted. The defaults convert everything, which
+    is the reset state. Every conversion left out shortens the round by
+    $ADC-CONVERSION-TIME, and its result register keeps what the last
+    conversion put there.
+
+  Drops conversions through the per-channel registers only, and clears the
+    class bits of $REG-ADC-CONFIG1: $ADC1-VSNS-DIS stops the temperature
+    conversions too. Costs four frames.
+  */
+  set-adc-conversions -> none
+      --current/int=ADC-CHANNEL-DIS-MASK
+      --temperature/int=ADC-CHANNEL-DIS-MASK
+      --output-voltage/int=ADC-CHANNEL-DIS-MASK
+      --supply-voltage/bool=true:
+    [current, temperature, output-voltage].do: | mask/int |
+      if mask & ~ADC-CHANNEL-DIS-MASK != 0: throw "INVALID_ARGUMENT"
+    write-register REG-ADC-ISNS-DIS (ADC-CHANNEL-DIS-MASK & ~current)
+    write-register REG-ADC-TSNS-DIS (ADC-CHANNEL-DIS-MASK & ~temperature)
+    write-register REG-ADC-VSNS-DIS (ADC-CHANNEL-DIS-MASK & ~output-voltage)
+    write-register REG-ADC-CONFIG1 (supply-voltage ? 0 : ADC1-VS-DIS)
+
+  /**
+  Reads which conversions the ADC makes. See $set-adc-conversions.
+
+  Folds the class bits of $REG-ADC-CONFIG1 in, whoever set them, so a
+    conversion counts as made only when neither its channel bit nor its
+    class bit drops it. $ADC1-VSNS-DIS counts against the temperatures too.
+    Costs five frames.
+  */
+  adc-conversions -> AdcConversions:
+    values := read-registers [REG-ADC-ISNS-DIS, REG-ADC-TSNS-DIS, REG-ADC-VSNS-DIS, REG-ADC-CONFIG1]
+    classes := values[3]
+    converted := : | index/int class-bits/int |
+      (classes & class-bits) != 0 ? 0 : ADC-CHANNEL-DIS-MASK & ~values[index]
+    return AdcConversions
+        --current=(converted.call 0 ADC1-ISNS-DIS)
+        --temperature=(converted.call 1 (ADC1-TSNS-DIS | ADC1-VSNS-DIS))
+        --output-voltage=(converted.call 2 ADC1-VSNS-DIS)
+        --supply-voltage=((classes & ADC1-VS-DIS) == 0)
+
+  /**
   Reads the raw current sense conversion of $channel.
 
   Returns a 10-bit result, running to $ADC-FULL-SCALE-10-BIT. Pass it to

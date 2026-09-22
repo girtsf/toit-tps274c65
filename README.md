@@ -75,6 +75,9 @@ Some gotchas to watch out for:
   `Driver.read-global-faults` masks it off; `read-register` does not.
 * Pass `--cs-setup-cycles=1` to `bus.device`, otherwise there is no delay
   between CS dropping and first SCLK rising, vs datasheet wants 45ns.
+* Undocumented: `ADC_CONFIG1` (2Eh) `ADC_VSNS_DIS` stops the temperature
+  conversions too (all read 0). Set every channel in `ADC_VSNS_DIS` (2Dh)
+  instead to drop only the output voltages; `Driver.set-adc-conversions` does.
 
 ## AI Disclosure
 

@@ -30,6 +30,8 @@ main:
   test-read-8-bit-results
   test-read-supply-voltage-raw
   test-set-adc
+  test-set-adc-conversions
+  test-adc-conversions-fold-in-classes
   test-adc-conversions
   test-read-adc-all
 
@@ -667,6 +669,61 @@ test-set-adc:
   driver.set-adc --no-enabled
   expect-equals 0x10 device.contents[REG-DEV-CONFIG5]
   expect-not driver.adc-enabled
+
+/**
+Selecting conversions writes the three per-channel registers inverted, and
+  never a class bit but the supply's.
+*/
+test-set-adc-conversions:
+  device := FakeDevice
+  driver := Driver device
+
+  driver.set-adc-conversions --current=0b0101 --temperature=0b1111 --output-voltage=0 --no-supply-voltage
+  expect-equals 4 device.frames.size
+  expect-equals 0b1010 device.contents[REG-ADC-ISNS-DIS]
+  expect-equals 0b0000 device.contents[REG-ADC-TSNS-DIS]
+  expect-equals 0b1111 device.contents[REG-ADC-VSNS-DIS]
+  // Output voltage is dropped channel by channel, not by ADC1-VSNS-DIS,
+  // which would take the temperatures with it.
+  expect-equals ADC1-VS-DIS device.contents[REG-ADC-CONFIG1]
+
+  conversions := driver.adc-conversions
+  expect-equals 0b0101 conversions.current
+  expect-equals 0b1111 conversions.temperature
+  expect-equals 0 conversions.output-voltage
+  expect-not conversions.supply-voltage
+
+  // The defaults are the reset state.
+  driver.set-adc-conversions
+  [REG-ADC-ISNS-DIS, REG-ADC-TSNS-DIS, REG-ADC-VSNS-DIS, REG-ADC-CONFIG1].do:
+    expect-equals 0 device.contents[it]
+
+  expect-throw "INVALID_ARGUMENT": driver.set-adc-conversions --current=0x10
+
+/** A class bit set behind the driver's back drops its conversions all the same. */
+test-adc-conversions-fold-in-classes:
+  device := FakeDevice
+  // Reserved bits reading back as ones must not count as dropped channels.
+  device.reserved-ones[REG-ADC-ISNS-DIS] = 0xf0
+  device.contents[REG-ADC-TSNS-DIS] = 0b0010
+  device.contents[REG-ADC-CONFIG1] = ADC1-VSNS-DIS
+  driver := Driver device
+
+  conversions := driver.adc-conversions
+  expect-equals 5 device.frames.size
+  expect-equals 0b1111 conversions.current
+  // ADC1-VSNS-DIS stops the temperatures as well as the output voltages.
+  expect-equals 0 conversions.temperature
+  expect-equals 0 conversions.output-voltage
+  expect conversions.supply-voltage
+
+  device.contents[REG-ADC-CONFIG1] = ADC1-ISNS-DIS | ADC1-VS-DIS
+  conversions = driver.adc-conversions
+  expect-equals 0 conversions.current
+  expect-equals 0b1101 conversions.temperature
+  expect-equals 0b1111 conversions.output-voltage
+  expect-not conversions.supply-voltage
+  expect-equals "I 0000 T 1101 V 1111 VS false" conversions.stringify
 
 /** The conversions the datasheet's own numbers pin down. */
 test-adc-conversions:

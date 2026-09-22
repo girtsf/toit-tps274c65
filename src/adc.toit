@@ -2,6 +2,22 @@
 import .driver
 import .registers
 
+/// Which conversions the ADC makes. See $Driver.set-adc-conversions.
+class AdcConversions:
+  /// The channels whose current is converted, bit 0 for channel 1.
+  current/int
+  /// The channels whose temperature is converted, bit 0 for channel 1.
+  temperature/int
+  /// The channels whose output voltage is converted, bit 0 for channel 1.
+  output-voltage/int
+  /// Whether the supply voltage is converted.
+  supply-voltage/bool
+
+  constructor --.current --.temperature --.output-voltage --.supply-voltage:
+
+  stringify -> string:
+    return "I $(%04b current) T $(%04b temperature) V $(%04b output-voltage) VS $supply-voltage"
+
 /// The decoded form of an ADC burst. See $Driver.read-adc-all.
 class AdcReadings:
   /// The 10-bit current conversions, by channel - 1. See $current.

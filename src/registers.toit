@@ -529,7 +529,14 @@ CONFIG5-WRITABLE-MASK ::= 0x3f
 
 /** Drops the four temperature conversions. */
 ADC1-TSNS-DIS ::= 1 << 3
-/** Drops the four output voltage conversions. */
+/**
+Drops the four output voltage conversions.
+
+Stops the temperature conversions too, which the datasheet does not say:
+  on the bench all four temperature results read 0 while this is set. To
+  drop the output voltages alone, set every channel in $REG-ADC-VSNS-DIS
+  instead; that leaves temperature working.
+*/
 ADC1-VSNS-DIS ::= 1 << 2
 /** Drops the four current conversions. */
 ADC1-ISNS-DIS ::= 1 << 1
