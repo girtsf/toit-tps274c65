@@ -52,7 +52,7 @@ Some gotchas to watch out for:
 * One frame lag for register reads in daisy chained mode. Never mentioned in
   the datasheet, with misleading frame diagrams.
 * LEDs can only be turned on/off and cannot be configured to convey any device
-  state.
+  state. The driver mirrors it for you; see `--state-leds` and `--fault-leds`.
 * TPS274C65EVM has its SDI and SCLK test point labels swapped.
 * Undocumented: `DEV_CONFIG1`, `DEV_CONFIG2`, `DEV_CONFIG3` and `DEV_CONFIG6`
   silently ignore writes while any channel is on.

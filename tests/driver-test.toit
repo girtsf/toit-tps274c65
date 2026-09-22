@@ -13,6 +13,9 @@ main:
   test-write
   test-set-channel
   test-set-leds
+  test-state-leds
+  test-fault-leds
+  test-led-mapping-is-checked
   test-write-switch-state-directly
   test-set-current-limit
   test-set-current-limit-split
@@ -295,6 +298,107 @@ test-set-leds:
 
   expect-throw "INVALID_ARGUMENT": driver.set-leds 0 --on
   expect-throw "INVALID_ARGUMENT": driver.set-leds LED-COUNT + 1 --on
+
+/**
+A state LED follows its channel, without a read and without a spare frame.
+
+The driver already knows the switch state, so the mirroring is one write to
+  the control register holding the LED, and only when that register changes.
+*/
+test-state-leds:
+  device := FakeDevice
+  driver := Driver device --state-leds=[1, 2, null, 8]
+
+  // Channel 1 on: the switch write, then LED1_4_CTL. Channel 3 is unmapped.
+  driver.set-channel 1 --on
+  expect-equals 2 device.frames.size
+  expect-equals #[0x80 | REG-SW-STATE, 0b0001] device.frames[0]
+  expect-equals #[0x80 | REG-LED1-4-CTL, 0b0001] device.frames[1]
+  expect-equals 0b0000_0001 driver.leds
+
+  driver.set-channel 3 --on
+  expect-equals 3 device.frames.size
+  expect-equals 0b0000_0001 driver.leds
+
+  // Channel 4 sits in the other control register, so that one is written.
+  driver.set-channel 4 --on
+  expect-equals 5 device.frames.size
+  expect-equals #[0x80 | REG-LED5-8-CTL, 0b1000] device.frames[4]
+  expect-equals 0b1000_0001 driver.leds
+
+  // Setting a channel that is already on rewrites SW_STATE but leaves the
+  // LEDs alone: they already show the right thing.
+  driver.set-channel 1 --on
+  expect-equals 6 device.frames.size
+
+  // A read carries no switch state change, so it costs nothing extra.
+  driver.read-register REG-DEV-CONFIG1
+  expect-equals 8 device.frames.size
+
+  driver.set-channel 1 --no-on
+  expect-equals 0b1000_0000 driver.leds
+  expect-equals 0b0000 device.contents[REG-LED1-4-CTL]
+
+  // Closing turns the outputs off, and the LEDs follow them down.
+  driver.close
+  expect-equals 0 driver.leds
+  expect-equals 0b0000 device.contents[REG-LED5-8-CTL]
+
+  // An LED outside the mapping is still the caller's to drive.
+  driver.set-leds 5 --on
+  expect-equals 0b0001_0000 driver.leds
+  driver.set-channel 4 --on
+  expect-equals 0b1001_0000 driver.leds
+
+/**
+The fault LEDs follow the fault byte, which rides along on every frame.
+
+They are all the same lamp: the byte is ORed across the channels, so it says
+  that something is wrong and not where.
+*/
+test-fault-leds:
+  device := FakeDevice
+  driver := Driver device --fault-leds=[7, 8]
+
+  driver.read-register REG-DEV-CONFIG1
+  expect-equals 0 driver.leds
+
+  // The next frame picks the fault byte up, and lights both LEDs with it.
+  device.faults = FAULT-ILIMIT
+  driver.read-register REG-DEV-CONFIG1
+  expect-equals 0b1100_0000 driver.leds
+  expect-equals 0b1100 device.contents[REG-LED5-8-CTL]
+
+  // A write refreshes them as well, and no frame goes out while nothing
+  // has moved.
+  frames := device.frames.size
+  driver.write-register REG-DEV-CONFIG4 0x02
+  expect-equals frames + 1 device.frames.size
+
+  device.faults = 0
+  driver.read-register REG-DEV-CONFIG1
+  expect-equals 0 driver.leds
+
+/** The two mappings are checked as they are handed over, not later. */
+test-led-mapping-is-checked:
+  // One entry per channel, and LEDs are numbered from one.
+  expect-throw "INVALID_ARGUMENT": Driver FakeDevice --state-leds=[1, 2, 3]
+  expect-throw "INVALID_ARGUMENT": Driver FakeDevice --state-leds=[0, 1, 2, 3]
+  expect-throw "INVALID_ARGUMENT":
+      Driver FakeDevice --state-leds=[1, 2, 3, LED-COUNT + 1]
+  expect-throw "INVALID_ARGUMENT": Driver FakeDevice --fault-leds=[9]
+
+  // An LED can only stand for one thing.
+  expect-throw "LED already claimed": Driver FakeDevice --state-leds=[1, 1, null, null]
+  expect-throw "LED already claimed":
+      Driver FakeDevice --state-leds=[1, 2, 3, 4] --fault-leds=[4]
+
+  // A mirrored LED is not the caller's to drive: the next refresh would
+  // undo the change anyway.
+  driver := Driver FakeDevice --state-leds=[1, 2, 3, 4] --fault-leds=[8]
+  expect-throw "LED configured in state-leds or fault-leds": driver.set-leds 1 --on
+  expect-throw "LED configured in state-leds or fault-leds": driver.set-leds 8 --on
+  driver.set-leds 5 --on
 
 /**
 Writing SW_STATE by hand keeps the shadow inside the four channels.

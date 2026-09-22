@@ -25,6 +25,17 @@ CS ::= 10
 /** The port the UI is served on. */
 PORT ::= 80
 
+/**
+The LED each channel's on/off state is mirrored onto. Null for none.
+
+The device cannot drive its LEDs from the switches itself, so the driver
+  does it, writing them from the state it already tracks.
+*/
+STATE-LEDS ::= [1, 3, 5, 7]
+
+/** The LEDs that light while any fault is pending. Null for none. */
+FAULT-LEDS ::= [8]
+
 main:
   bus := spi.Bus --clock=SCK --mosi=MOSI --miso=MISO
   device := bus.device
@@ -34,6 +45,8 @@ main:
       // TPS274C65 requires at least 45ns between CS dropping and first SCLK.
       --cs-setup-cycles=1
   driver := tps274c65.Driver device
+      --state-leds=STATE-LEDS
+      --fault-leds=FAULT-LEDS
   try:
     // A fresh device latches power-on reset and undervoltage. Read twice so
     // the page starts out reporting what is wrong now.

@@ -25,6 +25,12 @@ led-mask led/int -> int:
   if not 1 <= led <= LED-COUNT: throw "INVALID_ARGUMENT"
   return 1 << (led - 1)
 
+/** Adds $led to $mask, refusing one that is in it already. */
+claim-led_ mask/int led/int -> int:
+  bit := led-mask led
+  if (mask & bit) != 0: throw "LED already claimed"
+  return mask | bit
+
 /**
 Builds a 16-bit daisy-chain read frame for $register.
 
@@ -78,10 +84,47 @@ class Driver:
   sense-resistor/float
   /// `KSNS` that currents are decoded with. See $adc-milli-amps.
   sense-ratio/int
+  /**
+  The LED each channel's on/off state is mirrored onto, or null for none.
+
+  One entry per channel, $CHANNEL-COUNT of them, each an LED number 1 to
+    $LED-COUNT or null to leave that channel unmirrored. With
+    `--state-leds=[1, 2, 3, 4]`, LED 1 follows channel 1 and so on.
+
+  The device cannot do this itself: its LED drivers are plain outputs and
+    know nothing about the switches. The driver writes them from the
+    $switch-state it already tracks, so mirroring costs no reads, and a
+    frame only when a control register really changes. See $refresh-leds_.
+  */
+  state-leds/List?
+  /**
+  The LEDs that light while a fault is pending, or null for none.
+
+  Any number of LED numbers, 1 to $LED-COUNT. For now, they all show the same
+    thing: whether $faults is non-zero as of the last frame. The fault byte is
+    ORed across the channels, so it cannot say which one is at fault, and the
+    registers that can are read-to-clear -- a poll behind the caller's back
+    would wipe latched faults as fast as they arrived.
+
+  Refreshed on any frame the caller sends, so LEDs stay stale while the bus
+    is idle.
+  */
+  fault-leds/List?
+  /// The LEDs $state-leds and $fault-leds claim. See $led-mask.
+  mirrored-leds_/int := 0
+  /// Whether an LED refresh is under way or held off. See $refresh-leds_.
+  leds-held_/bool := false
 
   constructor .spi_device_
-      --.sense-resistor=DEFAULT-SENSE-RESISTOR-OHMS
-      --.sense-ratio=SENSE-RATIO:
+      --.sense-resistor/float=DEFAULT-SENSE-RESISTOR-OHMS
+      --.sense-ratio/int=SENSE-RATIO
+      --.state-leds/List?=null
+      --.fault-leds/List?=null:
+    if state-leds:
+      if state-leds.size != CHANNEL-COUNT: throw "INVALID_ARGUMENT"
+      state-leds.do: if it != null: mirrored-leds_ = claim-led_ mirrored-leds_ it
+    if fault-leds:
+      fault-leds.do: mirrored-leds_ = claim-led_ mirrored-leds_ it
 
   /**
   The fault byte the device returned on the most recent frame.
@@ -135,10 +178,15 @@ class Driver:
   LEDs are numbered 1 to $LED-COUNT. Costs one frame: the two control
     registers hold four LEDs each, and only the one holding $num is written.
 
+  LEDs configured in $state-leds or $fault-leds cannot be manually set and
+    will throw an error.
+
   See $leds.
   */
   set-leds num/int --on/bool -> none:
     mask := led-mask num
+    if (mirrored-leds_ & mask) != 0:
+      throw "LED configured in state-leds or fault-leds"
     updated := on ? leds_ | mask : leds_ & ~mask
     if num <= 4: write-register REG-LED1-4-CTL (updated & 0x0f)
     else: write-register REG-LED5-8-CTL (updated >> 4)
@@ -190,8 +238,10 @@ class Driver:
   read-register register/int -> int:
     // Discard the first answer: it belongs to whatever was asked for before.
     transfer_ (build-read-frame register --switch-state=switch-state_)
-    return transfer_
+    value := transfer_
         build-read-frame REG-FAULT-TYPE-STAT --switch-state=switch-state_
+    refresh-leds_
+    return value
 
   /**
   Reads every register in $registers, in one pipelined burst.
@@ -222,6 +272,7 @@ class Driver:
           ? registers[index + 1]
           : REG-FAULT-TYPE-STAT
       values[index] = transfer_ (build-read-frame next --switch-state=switch-state_)
+    refresh-leds_
     return values
 
   /**
@@ -251,6 +302,7 @@ class Driver:
     if register == REG-SW-STATE: switch-state_ = value & 0x0f
     else if register == REG-LED1-4-CTL: leds_ = (leds_ & 0xf0) | (value & 0x0f)
     else if register == REG-LED5-8-CTL: leds_ = (leds_ & 0x0f) | ((value & 0x0f) << 4)
+    refresh-leds_
 
   /**
   Sets the overcurrent limit of all four channels to $code.
@@ -586,6 +638,58 @@ class Driver:
         faults_
         sense-resistor
         sense-ratio
+
+  /**
+  Writes the mirrored LEDs out, if what they should show has changed.
+
+  Does nothing unless $state-leds or $fault-leds claimed any, and nothing
+    while the LEDs already show the right thing. Otherwise costs a frame per
+    control register that changes, so one for a mapping that stays inside
+    LED 1 to 4 and two for one that straddles the pair.
+
+  Called at the end of every read and write, which is the only moment either
+    of the things mirrored can have moved: $switch-state changes on a write
+    to `SW_STATE`, and $faults on any frame at all.
+
+  LEDs the mapping did not claim are left as they are, so $set-leds and the
+    mirroring can share the eight.
+  */
+  refresh-leds_ -> none:
+    if mirrored-leds_ == 0 or leds-held_: return
+    wanted := 0
+    if state-leds:
+      CHANNEL-COUNT.repeat: | index/int |
+        led := state-leds[index]
+        if led != null and (switch-state_ & (1 << index)) != 0:
+          wanted |= led-mask led
+    if fault-leds and faults_ != 0:
+      fault-leds.do: wanted |= led-mask it
+    target := (leds_ & ~mirrored-leds_) | wanted
+    if target == leds_: return
+    // Held for the duration, so the writes below do not refresh in turn.
+    leds-held_ = true
+    try:
+      if (target & 0x0f) != (leds_ & 0x0f):
+        write-register REG-LED1-4-CTL (target & 0x0f)
+      if (target & 0xf0) != (leds_ & 0xf0):
+        write-register REG-LED5-8-CTL (target >> 4)
+    finally:
+      leds-held_ = false
+
+  /**
+  Calls $block with the LED mirroring held off, and refreshes once after.
+
+  For a run of frames whose timing matters: an LED write landing in the
+    middle of one would show up in the trace. See $refresh-leds_.
+  */
+  without-led-refresh_ [block] -> any:
+    held := leds-held_
+    leds-held_ = true
+    try:
+      return block.call
+    finally:
+      leds-held_ = held
+      refresh-leds_
 
   /**
   Sets the bits of $set in $register and clears those of $clear.

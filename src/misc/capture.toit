@@ -221,7 +221,10 @@ capture-turn-on driver/Driver channel/int
     // Let the trimmed round land one conversion in the result register, so
     // the baseline is a reading and not whatever the ADC last left there.
     sleep --ms=1
-    return capture_ driver channel --pre=pre --post=post --max-points=points
+    // No LED write may land inside the loop: it would cost frames the trace
+    // does not account for, at the very moment being measured.
+    return driver.without-led-refresh_:
+      capture_ driver channel --pre=pre --post=post --max-points=points
   finally:
     driver.write-register REG-DEV-CONFIG5 config5
     driver.write-register REG-ADC-ISNS-DIS isns-dis
