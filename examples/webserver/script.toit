@@ -153,7 +153,7 @@ function renderBits(id, bits, emptyText) {
 }
 
 // The ADC box. Its results are plain `R`, so unlike the fault registers they
-// can be polled -- but a full set costs 38 frames, so the poll only asks for
+// can be polled -- but a full set costs 26 frames, so the poll only asks for
 // them while the box is open. Nothing is read at all while the ADC is off:
 // every result register would read zero, and zero is a real temperature.
 function adcOpen() { return document.getElementById("adc").open; }
@@ -167,27 +167,117 @@ function applyAdc(data) {
   // The message beside the checkbox is only there to explain an empty table.
   document.getElementById("adc-vs").textContent =
       data.enabled ? "" : "off, so nothing is converted";
+  adcConversions = data.conversions;
+  document.querySelectorAll("input.adc-kind").forEach(function (box) {
+    var mask = adcConversions[box.dataset.kind];
+    box.checked = mask === ALL_CHANNELS;
+    box.indeterminate = mask !== 0 && mask !== ALL_CHANNELS;
+  });
   var rows = document.getElementById("adc-rows");
   rows.innerHTML = "";
   if (!data.enabled) return;
   data.channels.forEach(function (entry) {
+    var channel = entry.channel;
     // Current and output voltage only mean something while the channel is on.
-    var off = (state.switchState & (1 << (entry.channel - 1))) === 0;
+    var off = (state.switchState & (1 << (channel - 1))) === 0;
     var row = document.createElement("tr");
-    row.appendChild(cell("CH" + entry.channel));
-    row.appendChild(cell(entry.milliAmps.toFixed(0) + " mA", hex3(entry.current), off));
-    row.appendChild(cell(entry.celsius.toFixed(1) + " C", hex2(entry.temperature), false));
-    row.appendChild(cell(entry.volts.toFixed(1) + " V", hex2(entry.voltage), off));
+    row.appendChild(channelCell(channel));
+    row.appendChild(readingCell(channel, "current",
+        entry.milliAmps.toFixed(0) + " mA", hex3(entry.current), off));
+    row.appendChild(readingCell(channel, "temperature",
+        entry.celsius.toFixed(1) + " C", hex2(entry.temperature), false));
+    row.appendChild(readingCell(channel, "output",
+        entry.volts.toFixed(1) + " V", hex2(entry.voltage), off));
     rows.appendChild(row);
   });
   // The supply is not a channel, but it is a voltage, so it goes in the
   // voltage column under the four outputs it feeds.
   var supply = document.createElement("tr");
-  supply.appendChild(cell("VS"));
+  supply.appendChild(checkCell("VS", adcConversions.supply, function () {
+    setAdcConversions({supply: this.checked});
+  }));
   supply.appendChild(cell(""));
   supply.appendChild(cell(""));
-  supply.appendChild(cell(data.supplyVolts.toFixed(2) + " V", hex3(data.supply)));
+  supply.appendChild(adcConversions.supply
+      ? cell(data.supplyVolts.toFixed(2) + " V", hex3(data.supply))
+      : cell("skipped", undefined, true));
   rows.appendChild(supply);
+}
+
+var ALL_CHANNELS = 0x0f;
+var ADC_KINDS = ["current", "temperature", "output"];
+// Which conversions the ADC makes: a channel mask per kind, and the supply.
+var adcConversions = {current: ALL_CHANNELS, temperature: ALL_CHANNELS,
+                      output: ALL_CHANNELS, supply: true};
+
+// Sends the conversions with the ones in changes replaced.
+function setAdcConversions(changes) {
+  var body = {};
+  Object.keys(adcConversions).forEach(function (key) {
+    body[key] = key in changes ? changes[key] : adcConversions[key];
+  });
+  act(api("/api/adc-conversions", body));
+}
+
+// Turns the given kinds of conversion on or off for the channels in mask.
+function setAdcChannels(kinds, mask, enabled) {
+  var changes = {};
+  kinds.forEach(function (kind) {
+    var current = adcConversions[kind];
+    changes[kind] = enabled ? current | mask : current & ~mask;
+  });
+  setAdcConversions(changes);
+}
+
+// The column headers turn a conversion on or off for all four channels.
+function buildAdcKinds() {
+  document.querySelectorAll("input.adc-kind").forEach(function (box) {
+    box.onchange = function () { setAdcChannels([this.dataset.kind], ALL_CHANNELS, this.checked); };
+  });
+}
+
+function channelConverted(channel, kind) {
+  return (adcConversions[kind] & (1 << (channel - 1))) !== 0;
+}
+
+// The first cell of a channel row: its name, and a checkbox covering all
+// three of its conversions, part-checked when only some of them are made.
+function channelCell(channel) {
+  var converted = ADC_KINDS.filter(function (kind) { return channelConverted(channel, kind); });
+  var td = checkCell("CH" + channel, converted.length === ADC_KINDS.length, function () {
+    setAdcChannels(ADC_KINDS, 1 << (channel - 1), this.checked);
+  });
+  td.querySelector("input").indeterminate =
+      converted.length > 0 && converted.length < ADC_KINDS.length;
+  return td;
+}
+
+// A reading, with a checkbox for whether its conversion is made. Reads
+// "skipped" when it is not: the register keeps whatever the last conversion
+// left there.
+function readingCell(channel, kind, text, raw, dim) {
+  var converted = channelConverted(channel, kind);
+  var td = converted ? cell(text, raw, dim) : cell("skipped", undefined, true);
+  var box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = converted;
+  box.onchange = function () { setAdcChannels([kind], 1 << (channel - 1), this.checked); };
+  td.insertBefore(box, td.firstChild);
+  return td;
+}
+
+// A table cell holding a labelled checkbox.
+function checkCell(text, checked, onchange) {
+  var td = document.createElement("td");
+  var label = document.createElement("label");
+  var box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = checked;
+  box.onchange = onchange;
+  label.appendChild(box);
+  label.appendChild(document.createTextNode(" " + text));
+  td.appendChild(label);
+  return td;
 }
 
 // A table cell holding a converted value, the conversion it came from beside
@@ -652,6 +742,7 @@ function poll() {
 
 buildChannels();
 buildCaptureChannels();
+buildAdcKinds();
 api("/api/registers").then(function (data) { buildRegisters(data.registers); }).catch(fail);
 var optionsReady = api("/api/options").then(buildLimitOptions);
 optionsReady.catch(fail);

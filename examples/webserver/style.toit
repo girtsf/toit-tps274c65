@@ -30,6 +30,7 @@ th { color: #666; font-size: .85rem; font-weight: normal; text-transform: upperc
      letter-spacing: .06em; }
 td { font-family: ui-monospace, Menlo, monospace; }
 td.off { color: #999; }
+td > input { margin: 0 .3rem 0 0; }
 td:first-child, th:first-child { text-align: left; }
 .raw { color: #999; font-size: .8rem; margin-left: .4rem; }
 summary { cursor: pointer; }

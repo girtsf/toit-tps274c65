@@ -54,7 +54,10 @@ the ADC</label>
 
 <table>
 <thead>
-<tr><th></th><th>current</th><th>temperature</th><th>output</th></tr>
+<tr><th></th>
+<th><label><input type="checkbox" class="adc-kind" data-kind="current"> current</label></th>
+<th><label><input type="checkbox" class="adc-kind" data-kind="temperature"> temperature</label></th>
+<th><label><input type="checkbox" class="adc-kind" data-kind="output"> output</label></th></tr>
 </thead>
 <tbody id="adc-rows"></tbody>
 </table>
@@ -64,8 +67,11 @@ which puts full scale at 3.25 A; a board with another one reads proportionally
 wrong. Temperature is the junction of each FET, and the only reading that means
 anything while a channel is off -- current and output voltage both sit near
 zero there. A round of the ADC takes 1.7 ms, so a reading is at most that
-stale, and it costs 38 frames to collect the lot, which is why this box is
-polled only while it is open.</p>
+stale, and it costs 26 frames to collect the lot, which is why this box is
+polled only while it is open. Every conversion unchecked comes out of the
+round and shortens it by 128 us. A column header covers all four channels, one
+by one: dropping the output voltages as a class in ADC_CONFIG1 would stop the
+temperatures too, which the datasheet does not mention.</p>
 </details>
 </section>
 

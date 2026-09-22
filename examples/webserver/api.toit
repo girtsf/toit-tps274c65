@@ -68,6 +68,8 @@ class Ui:
     if resource == "/api/adc":
       if request.method == http.GET: return read-adc_
       return set-adc_ (json.decode-stream request.body)["enabled"]
+    if resource == "/api/adc-conversions":
+      return set-adc-conversions_ (json.decode-stream request.body)
     if resource == "/api/state": return state_
     if resource == "/api/capture":
       return capture_ (json.decode-stream request.body)
@@ -193,24 +195,34 @@ class Ui:
   /**
   Reads every ADC result there is, and whether the ADC is running at all.
 
-  All of them are plain `R`, so this has no side effects. It costs 21 frames
-    -- two to see whether the ADC is running at all, and nineteen for the
-    burst that collects all eighteen result registers -- which is why the
-    page asks for it only while the box is open.
+  All of them are plain `R`, so this has no side effects. It costs 26 frames
+    -- two to see whether the ADC is running at all, five for the registers
+    that drop conversions from the round, and nineteen for the burst that
+    collects all eighteen result registers -- which is why the page asks for
+    it only while the box is open.
 
-  Reads nothing when the ADC is off. Every result register would read 0,
+  Reads no results when the ADC is off. Every result register would read 0,
     which is a real temperature and a real voltage, and showing those as
-    measurements would be a lie.
+    measurements would be a lie. What is dropped from the round is read
+    either way, so it can be set up before the ADC runs.
   */
   read-adc_ -> Map:
     adc := {
       "enabled": false,
+      "conversions": null,
       "channels": null,
       "supply": null,
       "supplyVolts": null,
       "senseResistor": driver_.sense-resistor,
     }
     mutex_.do:
+      conversions := driver_.adc-conversions
+      adc["conversions"] = {
+        "current": conversions.current,
+        "temperature": conversions.temperature,
+        "output": conversions.output-voltage,
+        "supply": conversions.supply-voltage,
+      }
       if driver_.adc-enabled:
         adc["enabled"] = true
         readings := driver_.read-adc-all
@@ -326,6 +338,23 @@ class Ui:
   */
   set-adc_ enabled/bool -> Map:
     mutex_.do: driver_.set-adc --enabled=enabled
+    return read-adc_
+
+  /**
+  Selects the conversions the ADC makes, and answers with a fresh set of
+    readings.
+
+  $payload holds a mask of the channels to convert for each of "current",
+    "temperature" and "output", and whether to convert the supply in
+    "supply". See $tps274c65.Driver.set-adc-conversions.
+  */
+  set-adc-conversions_ payload/Map -> Map:
+    mutex_.do:
+      driver_.set-adc-conversions
+          --current=payload["current"]
+          --temperature=payload["temperature"]
+          --output-voltage=payload["output"]
+          --supply-voltage=payload["supply"]
     return read-adc_
 
   /** Returns $state_ with the ADC readings in $adc attached. */
