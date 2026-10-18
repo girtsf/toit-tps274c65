@@ -226,9 +226,12 @@ capture-turn-on driver/Driver channel/int
     return driver.without-led-refresh_:
       capture_ driver channel --pre=pre --post=post --max-points=points
   finally:
-    driver.write-register REG-DEV-CONFIG5 config5
-    driver.write-register REG-ADC-ISNS-DIS isns-dis
-    driver.write-register REG-ADC-CONFIG1 adc-config1
+    // Also when cancelled or past a deadline: SPI transfers wait, and a
+    // half restore leaves the ADC trimmed.
+    critical-do --no-respect-deadline:
+      driver.write-register REG-DEV-CONFIG5 config5
+      driver.write-register REG-ADC-ISNS-DIS isns-dis
+      driver.write-register REG-ADC-CONFIG1 adc-config1
 
 /**
 Runs the capture loop of $capture-turn-on, the ADC already trimmed for it.
